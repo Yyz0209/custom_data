@@ -369,9 +369,16 @@ latest_info = ""
 if data and "全国" in data and not data["全国"].empty:
     try:
         latest_month = pd.to_datetime(data["全国"]["时间"]).max()
-        latest_info = f"数据更新至 {latest_month.strftime('%Y-%m')}"
+        latest_info = f"全国数据更新至 {latest_month.strftime('%Y-%m')}"
     except Exception:
         pass
+if data and "杭州市" in data and not data["杭州市"].empty:
+    try:
+        latest_month_zhejiang = pd.to_datetime(data["杭州市"]["时间"]).max()
+        latest_info_zhejiang = f"浙江省数据更新至 {latest_month_zhejiang.strftime('%Y-%m')}"
+    except Exception:
+        pass
+
 
 # 侧边栏：页面选择 + 分页筛选
 with st.sidebar:
@@ -392,26 +399,9 @@ with st.sidebar:
         if latest_info:
             st.caption(latest_info)
 
-        st.header("数据更新")
-        if st.button("🔄 检查并更新数据", type="primary", use_container_width=True):
-            with st.spinner("正在检查数据更新，请稍候..."):
-                update_result = run_data_updater()
-                if update_result["success"]:
-                    if update_result["has_updates"]:
-                        st.success(f"✅ {update_result['message']}")
-                        st.info("页面将在3秒后自动刷新以显示最新数据")
-                        st.cache_data.clear()
-                        time.sleep(3)
-                        st.rerun()
-                    else:
-                        st.info(f"ℹ️ {update_result['message']}")
-                else:
-                    st.error(f"❌ {update_result['message']}")
-                    if update_result["output"]:
-                        with st.expander("查看详细信息"):
-                            st.code(update_result["output"])
-        st.caption("💡 点击按钮检查海关总署和杭州海关是否发布了新的月度数据")
-        st.markdown("---")
+        if latest_info_zhejiang:
+            st.caption(latest_info_zhejiang)    
+
 
         st.header("地区筛选")
         default_index = FINAL_LOCATIONS.index("浙江省") if "浙江省" in FINAL_LOCATIONS else 0
