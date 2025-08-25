@@ -105,6 +105,30 @@ html, body, [class*="st-"] {
 
 /* 分割线更柔和 */
 hr { border: none; height: 1px; background: linear-gradient(90deg, transparent, var(--border), transparent); }
+
+/* 修复：不要用通用字体覆盖图标字体 */
+.material-icons,
+.material-icons-outlined,
+.material-icons-round,
+.material-icons-sharp,
+.material-icons-two-tone,
+.material-symbols-outlined,
+.material-symbols-rounded,
+.material-symbols-sharp,
+[class^="material-icons"],
+[class*=" material-icons"],
+[class^="material-symbols"],
+[class*=" material-symbols"] {
+  font-family: "Material Symbols Outlined", "Material Icons" !important;
+  font-weight: normal !important;
+  font-style: normal !important;
+  text-transform: none !important;
+  letter-spacing: normal !important;
+  line-height: 1 !important;
+  -webkit-font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+}
+
 </style>
 """,
     unsafe_allow_html=True,
