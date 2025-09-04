@@ -1288,10 +1288,16 @@ elif page == "机构外币存贷款看板":
             if year_now is None:
                 return None, None
             v = pd.Series(vals).astype(float)
-            mask_cur = dates.dt.year == year_now
-            cur_vals = v[mask_cur].dropna()
-            cur_sum = float(cur_vals.sum()) if len(cur_vals) else None
-            mask_prev = dates.dt.year == (year_now - 1)
+            # 以当前年最新数据的“月份”作为YTD截止月，并按同期月份对比上一年
+            mask_cur_year = dates.dt.year == year_now
+            if not mask_cur_year.any():
+                return None, None
+            last_month = int(pd.to_datetime(dates[mask_cur_year]).max().month)
+            mask_cur = mask_cur_year & (dates.dt.month <= last_month)
+            cur_sum = float(v[mask_cur].dropna().sum()) if mask_cur.any() else None
+            # 上年同期（截止到同一个月份）
+            mask_prev_year = dates.dt.year == (year_now - 1)
+            mask_prev = mask_prev_year & (dates.dt.month <= last_month)
             prev_vals = v[mask_prev].dropna()
             if len(prev_vals):
                 prev_sum = float(prev_vals.sum())
