@@ -50,11 +50,38 @@ st.markdown(
   --accent: #9AAE8C;
 }
 
-html, body, [class*="st-"] {
+/* 避免重置所有 st-* 组件的背景，防止 Slider 轨道被盖掉 */
+html, body {
   font-family: Inter, "HarmonyOS Sans SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+}
+[data-testid="stAppViewContainer"] {
   background: var(--bg);
   color: var(--text);
 }
+
+/* Slider: clean, full-width, no shadow */
+.stSlider { width: 100%; padding: 0; margin: 0; }
+.stSlider [data-baseweb="slider"] { width: 100%; }
+.stSlider [data-baseweb="slider"] * { box-shadow: none !important; }
+.stSlider [data-baseweb="slider"] > div,
+[data-baseweb="slider"] > div {
+  background: transparent !important; /* 取消底部灰色轨道，仅保留选中条 */
+  height: 6px; border-radius: 999px; box-shadow: none !important;
+}
+.stSlider [data-baseweb="slider"] [aria-hidden="true"],
+[data-baseweb="slider"] [aria-hidden="true"] {
+  background: var(--accent) !important; /* 仅显示选中条 */
+  height: 6px; border-radius: 999px;
+}
+.stSlider [data-baseweb="slider"] [role="slider"] {
+  box-shadow: none !important; outline: none !important;
+  background: #fff !important; border: 2px solid var(--accent) !important;
+  width: 14px; height: 14px; border-radius: 50%;
+}
+.stSlider [data-baseweb="slider"] [role="slider"]:hover {
+  transform: none !important;
+}
+.stSlider span { color: var(--muted) !important; }
 
 /* 顶部标题条（简洁风格） */
 .hero {
@@ -126,23 +153,23 @@ def load_data():
 
 def run_data_updater():
     try:
-     
+
         result = subprocess.run(
             [sys.executable, "自动数据更新器.py"],
             capture_output=True,
             text=True,
             encoding='utf-8',
-            errors='ignore',  
-            timeout=600  
+            errors='ignore',
+            timeout=600
         )
-        
+
         if result.returncode == 0:
             output = result.stdout or ""
             output_lines = output.strip().split('\n') if output else []
-            
+
             has_updates = False
             message = "更新检查完成"
-            
+
             for line in output_lines:
                 if line and "发现新数据并已更新" in line:
                     has_updates = True
@@ -151,7 +178,7 @@ def run_data_updater():
                 elif line and "当前已是最新数据" in line:
                     message = line.split("消息: ")[-1] if "消息: " in line else line
                     break
-            
+
             return {
                 "success": True,
                 "has_updates": has_updates,
@@ -165,7 +192,7 @@ def run_data_updater():
                 "message": f"更新失败: {error_msg}",
                 "output": error_msg
             }
-            
+
     except subprocess.TimeoutExpired:
         return {
             "success": False,
@@ -194,11 +221,45 @@ def fmt_delta(y):
     return cls, val
 
 
+def render_card(label, val, yoy):
+    cls, delta = fmt_delta(yoy if pd.notna(yoy) else None)
+    chip_html = f'<span class="chip {cls}">{delta}</span>' if delta else ""
+    return f'<div class="card"><div class="label">{label}</div><div class="value">{fmt_value(val)}</div>{chip_html}</div>'
+
+
+
+def nice_percent_axis(vals):
+    xs = [v for v in vals if v is not None and not pd.isna(v)]
+    if not xs:
+        return None, None
+    vmin, vmax = min(xs), max(xs)
+    if vmin == vmax:
+        vmin -= 5
+        vmax += 5
+    span = vmax - vmin
+    vmin -= span * 0.1
+    vmax += span * 0.1
+    import math
+    nice_min = math.floor(vmin / 5.0) * 5
+    nice_max = math.ceil(vmax / 5.0) * 5
+    nice_min = min(nice_min, 0)
+    nice_max = max(nice_max, 0)
+    if nice_max - nice_min < 10:
+        nice_max = nice_min + 10
+    return nice_min, nice_max
+
+
+def show_chart(chart, height="520px"):
+    st.markdown('<div class="chart-rounded">', unsafe_allow_html=True)
+    st_pyecharts(chart, height=height)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def build_line(x_list, series_dict, title):
-   
+
     chart = Line(init_opts=opts.InitOpts(bg_color="#FFFFFF"))
     chart.add_xaxis(xaxis_data=x_list)
-    
+
     chart.set_colors(PALETTE)
     for name, y in series_dict.items():
         chart.add_yaxis(
@@ -239,10 +300,34 @@ CATEGORY_COLOR_MAP = {
 }
 CATEGORY_PALETTE = [CATEGORY_COLOR_MAP[c] for c in CATEGORY_ORDER]
 
+# 修复：由于源码中 CATEGORY_ORDER 存在编码损坏，新增一套标准化的类别与配色
+CATEGORY_LABELS = [
+    "农产品",
+    "矿产品",
+    "化学制品",
+    "纺织服装",
+    "木制品",
+    "金属石料制品",
+    "电子设备",
+    "交通设备",
+    "其他制品",
+]
+CATEGORY_COLOR = {
+    "农产品": "#59A14F",
+    "矿产品": "#4E79A7",
+    "化学制品": "#EDC948",
+    "纺织服装": "#E15759",
+    "木制品": "#9C755F",
+    "金属石料制品": "#B07AA1",
+    "电子设备": "#76B7B2",
+    "交通设备": "#F28E2B",
+    "其他制品": "#BAB0AC",
+}
+CATEGORY_PALETTE2 = [CATEGORY_COLOR[c] for c in CATEGORY_LABELS]
+
 
 @st.cache_data
-def load_category_data():
-    
+def load_category_data2():
     filename = "9大类产品分析表.xlsx"
     if not os.path.exists(filename):
         return None
@@ -251,6 +336,44 @@ def load_category_data():
         data = {}
         for sheet in xls.sheet_names:
             df = pd.read_excel(filename, sheet_name=sheet, index_col=0)
+            # normalize labels and numbers
+            def _norm_label(s: str) -> str:
+                t = str(s).replace('\u3000',' ').replace('\xa0',' ').strip()
+                t = t.replace('（','(').replace('）',')')
+                t = t.replace('其它', '其他')
+                alias = {
+                    '农林牧渔产品': '农产品',
+                    '矿物产品': '矿产品',
+                    '矿产': '矿产品',
+                    '木材及制品': '木制品',
+                    '电子电气设备': '电子设备',
+                    '电子及电气设备': '电子设备',
+                    '金属及石料制品': '金属石料制品',
+                    '交通运输设备': '交通设备',
+                    '交通运输设备制造': '交通设备',
+                    '交通装备': '交通设备',
+                    '其它制品': '其他制品',
+                    '其他': '其他制品',
+                }
+                if t.startswith('其他制品') or t.startswith('其它制品'):
+                    t = '其他制品'
+                return alias.get(t, t)
+
+            df.index = df.index.map(lambda x: str(x).replace('\u3000',' ').replace('\xa0',' ').strip())
+            df.rename(columns=lambda c: _norm_label(c), inplace=True)
+            for c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors='coerce')
+            # 若‘其他制品’缺失，尝试用合计减去其余八类推算
+            if '其他制品' not in df.columns:
+                total_candidates = [
+                    '合计','总计','进出口合计','进出口总额','总额',
+                    '合计(美元)','合计(人民币)','进出口_合计','进出口_总计'
+                ]
+                tot = next((c for c in total_candidates if c in df.columns), None)
+                if tot:
+                    others = [c for c in CATEGORY_LABELS if c != '其他制品' and c in df.columns]
+                    if others:
+                        df['其他制品'] = (pd.to_numeric(df[tot], errors='coerce') - df[others].sum(axis=1))
             data[sheet] = df
         return data
     except Exception as e:
@@ -259,30 +382,30 @@ def load_category_data():
 
 
 def create_horizontal_percentage_chart(data, title, regions, categories):
-    
-    
-    categories_ordered = [c for c in CATEGORY_ORDER if c in categories]
+
+
+    categories_ordered = [c for c in CATEGORY_LABELS if c in categories]
     if not categories_ordered:
         categories_ordered = categories
     data = data.reindex(columns=categories_ordered, fill_value=0)
 
-    
+
     row_sums = data.sum(axis=1).replace(0, 1)
     percentage_data = data.div(row_sums, axis=0) * 100.0
 
-    
+
     reversed_regions = list(reversed(regions))
 
-    
+
     chart_height = max(400, len(regions) * 60 + 150)
 
-    
+
     chart = Bar(init_opts=opts.InitOpts(bg_color="#FFFFFF", width="100%", height=f"{chart_height}px"))
 
-    
+
     chart.add_xaxis(reversed_regions)
 
-    
+
     for category in categories_ordered:
         values = []
         for region in reversed_regions:
@@ -297,11 +420,11 @@ def create_horizontal_percentage_chart(data, title, regions, categories):
             y_axis=values,
             stack="stack1",
             label_opts=opts.LabelOpts(is_show=False),
-            category_gap="60%",
-            itemstyle_opts=opts.ItemStyleOpts(color=CATEGORY_COLOR_MAP.get(category)),
+            category_gap="35%",
+            itemstyle_opts=opts.ItemStyleOpts(color=CATEGORY_COLOR.get(category)),
         )
 
-    chart.set_colors(CATEGORY_PALETTE)
+    chart.set_colors(CATEGORY_PALETTE2)
 
     chart.set_global_opts(
         title_opts=opts.TitleOpts(
@@ -343,7 +466,7 @@ def create_horizontal_percentage_chart(data, title, regions, categories):
         ),
     )
 
-    
+
     chart.reversal_axis()
     return chart
 
@@ -353,59 +476,367 @@ def create_horizontal_percentage_chart(data, title, regions, categories):
 @st.cache_data
 def load_fx_deposit_loan():
     """
-    加载金融机构外币存贷款.xlsx，计算同比（按12期同比），并返回 DataFrame 及列名。
+    从多个 Excel 文件（如 2023/2024/2025金融机构外币存贷款.xlsx）汇总月度数据，
+    仅按“住户 + 非金融企业”构成境内口径；境外单独提取；
+    输出合计与12期同比。
+
+    返回 DataFrame 列：
+        日期, 外币存款_境内, 外币存款_境外, 外币存款_合计, 存款同比,
+            外币贷款_境内, 外币贷款_境外, 外币贷款_合计, 贷款同比
     """
     import os
+    import re
     import pandas as pd
-    candidates = [
-        "金融机构外币存贷款.xlsx",
-        os.path.join("/mnt/data", "金融机构外币存贷款.xlsx"),
-    ]
-    path = None
-    for c in candidates:
-        if os.path.exists(c):
-            path = c
-            break
-    if path is None:
-        return None, None, None
-    try:
-        df = pd.read_excel(path, sheet_name=0)
-    except Exception:
-        return None, None, None
-    # 规范字段
-    if "日期" not in df.columns:
-        # 尝试自动识别
-        date_col = None
-        for c in df.columns:
-            if "日期" in str(c) or "时间" in str(c):
-                date_col = c
+
+    def _find_files():
+        files = []
+        try:
+            base_dirs = [
+                os.getcwd(),
+                os.path.dirname(os.path.abspath(__file__)),
+                os.path.join(os.getcwd(), '数据'),
+                os.path.join(os.getcwd(), 'data'),
+            ]
+            patterns = [
+                '*金融机构*外币*存贷款*.xlsx',
+                '*外币*存贷款*.xlsx',
+                '2023*外币*存贷款*.xlsx',
+                '2024*外币*存贷款*.xlsx',
+                '2025*外币*存贷款*.xlsx',
+            ]
+            import glob
+            for d in base_dirs:
+                if not os.path.isdir(d):
+                    continue
+                for p in patterns:
+                    files.extend(glob.glob(os.path.join(d, p)))
+        except Exception:
+            pass
+        # 去重为文件名（同名以最早年份排序）
+        files = list(dict.fromkeys(files))
+        def _key(x):
+            m = re.search(r'(20\d{2})', x)
+            return int(m.group(1)) if m else 0
+        return sorted(files, key=_key)
+
+    def _clean_text(s):
+        t = str(s)
+        t = t.replace('\u3000',' ').replace('\xa0',' ').strip()
+        t = t.replace('（','(').replace('）',')')
+        return t
+
+    def _to_month(col):
+        # 匹配 yyyy-mm（首部匹配即可），并兼容：
+        # - 全/长横线（统一为 -）
+        # - pandas 读成 Timestamp/datetime/date（取其 year、month）
+        import datetime as _dt
+        if isinstance(col, (pd.Timestamp, _dt.datetime, _dt.date)):
+            return pd.Timestamp(getattr(col, 'year'), getattr(col, 'month'), 1)
+        s = _clean_text(col)
+        s = s.replace('－', '-').replace('–', '-').replace('—', '-')
+        # 允许后面跟 -dd 或时间串，只要前缀是 yyyy-mm 即可
+        m = re.findall(r'^(20\d{2})\-(0[1-9]|1[0-2])', s)
+        if m:
+            y, mm = m[0]
+            return pd.Timestamp(int(y), int(mm), 1)
+        # 兜底：尝试 to_datetime 再取 year/month
+        try:
+            dt = pd.to_datetime(s, errors='coerce')
+            if pd.notna(dt):
+                return pd.Timestamp(dt.year, dt.month, 1)
+        except Exception:
+            pass
+        return None
+
+    # 目标行关键字（中文/英文），避免抓到“短期/中长期/子项”
+    KW = {
+        'dep_hh': [r'住户存款', r'Deposits\s*of\s*Households'],
+        'dep_nfe': [r'非金融企业存款', r'Deposits\s*of\s*Non\-?financial\s*Enterprises'],
+        'dep_over': [r'境外存款', r'Overseas\s*Deposits'],
+        # 贷款：按你的要求，境内贷款直接匹配“境内贷款/Domestic Loans”，不再用住户+非金求和
+        'loan_dom': [r'境内贷款', r'国内贷款', r'本外币贷款', r'Domestic\s*Loans?'],
+        'loan_over': [r'境外贷款', r'Overseas\s*Loans'],
+        # 下面两个只保留以备后续需要（当前不用于境内口径计算）
+        'loan_hh': [r'住户贷款', r'Loans\s*to\s*Households'],
+        'loan_nfe': [r'非金融企业.*贷款', r'Loans\s*to\s*Non\-?financial\s*Enterprises', r'Non\-financial\s*Enterprises.*Organizations'],
+    }
+    SUBITEM_EXCLUDE = r'短期|中长期|消费|经营|按揭|购车|短\s*期|中\s*长\s*期'
+
+    def _match_label(s, patterns):
+        s = _clean_text(s)
+        if re.search(SUBITEM_EXCLUDE, s):
+            return False
+        for p in patterns:
+            if re.search(p, s, flags=re.IGNORECASE):
+                return True
+        return False
+
+    def _extract_from_sheet(df):
+        # 方案A：按列名识别月份（适用于标准表头）
+        df = df.copy()
+        # 注意：不要修改 df.columns 的原始类型，避免 2023.10 被转成 '2023.1' 导致 10 月丢失
+        label_col = None
+        if len(df.columns) == 0:
+            return {}
+        for c in df.columns[:3]:  # 前3列里找文字列
+            try:
+                series = df[c].astype(str)
+            except Exception:
+                continue
+            if series.str.contains('存款|贷款|Item|项目|Loans|Deposits', regex=True, na=False).any():
+                label_col = c
                 break
-        if date_col is None:
-            return None, None, None
-        df.rename(columns={date_col: "日期"}, inplace=True)
-    dep_col = None
-    loan_col = None
-    for c in df.columns:
-        if "存款" in str(c):
-            dep_col = c
-        if "贷款" in str(c):
-            loan_col = c
-    if dep_col is None or loan_col is None:
-        return None, None, None
+        if label_col is None:
+            label_col = df.columns[0]
+        # 识别月份列
+        month_cols = []
+        for c in df.columns:
+            ts = _to_month(c)
+            if ts is not None:
+                month_cols.append((c, ts))
+        # 去重并按月份排序（防止 2023.10 被等价成 2023.1 导致顺序错误）
+        seen = set()
+        uniq = []
+        for c, ts in month_cols:
+            if ts not in seen:
+                uniq.append((c, ts))
+                seen.add(ts)
+        month_cols = sorted(uniq, key=lambda x: x[1])
+        if not month_cols:
+            return {}
+        # 生成一个 label -> Series(ts->value)
+        out = {}
+        for _, row in df.iterrows():
+            label = _clean_text(row.get(label_col, ''))
+            if not label:
+                continue
+            for key, pats in KW.items():
+                if _match_label(label, pats):
+                    vals = {}
+                    for c, ts in month_cols:
+                        v = pd.to_numeric(row.get(c), errors='coerce')
+                        if pd.notna(v):
+                            vals[ts] = float(v)
+                    s = pd.Series(vals).sort_index()
+                    out[key] = out.get(key, pd.Series(dtype=float)).combine_first(s)
+        return out
 
-    df = df.copy()
-    df["日期"] = pd.to_datetime(df["日期"])
-    df.sort_values("日期", inplace=True)
+    def _extract_from_sheet_fuzzy(df):
+        """
+        模糊解析：
+        - 在前几列/行中定位“标签列”（含 Loans/Deposits/存款/贷款）；
+        - 月份列仅识别 yyyy-mm（兼容全角/长横线，会统一为-）；
+        - 如果列名无法识别，则在前若干行单元格里寻找 yyyy-mm 作为该列月份。
+        """
+        df = df.copy()
+        # 文本视图用于关键字/月份识别，但保留原 df 取数
+        text = df.astype(str).map(_clean_text)
 
-    # 12期同比
-    df["存款同比"] = df[dep_col].pct_change(periods=12)
-    df["贷款同比"] = df[loan_col].pct_change(periods=12)
+        # 1) 标签列：前3-4列中找关键字
+        label_col_idx = None
+        max_scan_rows = min(30, len(text))
+        scan_cols = min(4, text.shape[1])
+        for j in range(scan_cols):
+            col_vals = text.iloc[:max_scan_rows, j]
+            if col_vals.str.contains('存款|贷款|Loans|Deposits|Item|项目', regex=True, na=False).any():
+                label_col_idx = j
+                break
+        if label_col_idx is None:
+            return {}
 
-    return df, dep_col, loan_col
+        # 2) 月份列：优先列名；否则在前10行里找 yyyy-mm
+        month_cols = []  # (col_index, ts)
+        for j in range(text.shape[1]):
+            ts_found = None
+            # 列名本身
+            ts = _to_month(df.columns[j])
+            if ts is not None:
+                ts_found = ts
+            else:
+                # 前10行单元格
+                for i in range(min(10, len(text))):
+                    ts = _to_month(text.iat[i, j])
+                    if ts is not None:
+                        ts_found = ts
+                        break
+            if ts_found is not None:
+                month_cols.append((j, ts_found))
+        if not month_cols:
+            return {}
+        # 去重并按时间排序
+        uniq = {}
+        for j, ts in month_cols:
+            uniq[ts] = j
+        month_cols = sorted([(c, ts) for ts, c in uniq.items()], key=lambda x: x[1])
+
+        # 3) 逐行提取
+        out = {}
+        for i in range(len(text)):
+            label = text.iat[i, label_col_idx]
+            if not label:
+                continue
+            for key, pats in KW.items():
+                if _match_label(label, pats):
+                    vals = {}
+                    for c, ts in month_cols:
+                        v = pd.to_numeric(df.iat[i, c], errors='coerce')
+                        if pd.notna(v):
+                            vals[ts] = float(v)
+                    s = pd.Series(vals).sort_index()
+                    out[key] = out.get(key, pd.Series(dtype=float)).combine_first(s)
+        return out
 
 
 
+    # 汇总所有文件/工作表
+    ser_map = {}
+    for path in _find_files():
+        try:
+            xls = pd.ExcelFile(path)
+        except Exception:
+            continue
+        for sh in xls.sheet_names:
+            try:
+                raw = xls.parse(sh, header=0)
+            except Exception:
+                continue
+            part_a = _extract_from_sheet(raw)
+            # 同时跑一遍模糊解析，用于兼容表头复杂的工作表；二者结果做并集
+            try:
+                part_b = _extract_from_sheet_fuzzy(raw)
+            except Exception:
+                part_b = {}
+            keys = set(part_a.keys()) | set(part_b.keys())
+            for k in keys:
+                s_a = part_a.get(k, pd.Series(dtype=float))
+                s_b = part_b.get(k, pd.Series(dtype=float))
+                merged = s_a.combine_first(s_b)
+                if not merged.empty:
+                    ser_map[k] = ser_map.get(k, pd.Series(dtype=float)).combine_first(merged)
 
+    if not ser_map:
+        return None
+
+    # 构造 DataFrame
+    idx = None
+    for s in ser_map.values():
+        if idx is None:
+            idx = s.index
+        else:
+            idx = idx.union(s.index)
+    idx = idx.sort_values()
+
+    def get_series(name):
+        return ser_map.get(name, pd.Series(index=idx, dtype=float)).reindex(idx)
+
+    dep_dom = get_series('dep_hh').fillna(0) + get_series('dep_nfe').fillna(0)
+    dep_for = get_series('dep_over').fillna(pd.NA)
+    loan_dom = get_series('loan_dom').fillna(pd.NA)  # 直接匹配“境内贷款”
+    loan_for = get_series('loan_over').fillna(pd.NA)
+
+    df = pd.DataFrame({
+        '日期': idx,
+        '外币存款_境内': dep_dom.values,
+        '外币存款_境外': dep_for.values,
+        '外币贷款_境内': loan_dom.values,
+        '外币贷款_境外': loan_for.values,
+    })
+    # 合计与同比（合计）
+    df['外币存款_合计'] = pd.to_numeric(df['外币存款_境内'], errors='coerce').fillna(0) + pd.to_numeric(df['外币存款_境外'], errors='coerce').fillna(0)
+    df['外币贷款_合计'] = pd.to_numeric(df['外币贷款_境内'], errors='coerce').fillna(0) + pd.to_numeric(df['外币贷款_境外'], errors='coerce').fillna(0)
+    # 同比：保留两位小数的百分比，最早从 2024-01 开始（即有足够12个月基数时）
+    df['存款同比'] = (df['外币存款_合计'].replace(0, pd.NA).pct_change(12) * 100).round(2)
+    df['贷款同比'] = (df['外币贷款_合计'].replace(0, pd.NA).pct_change(12) * 100).round(2)
+    # 清除 2024年1月之前的同比（不足12个月）
+    first_yoy_date = None
+    if len(df) and pd.notna(df.iloc[0]['日期']):
+        # 以时间索引为准，定位起始可同比的索引位置
+        try:
+            first_yoy_date = pd.to_datetime(df['日期']).min() + pd.DateOffset(months=12)
+        except Exception:
+            first_yoy_date = None
+    if first_yoy_date is not None:
+        df.loc[pd.to_datetime(df['日期']) < first_yoy_date, ['存款同比','贷款同比']] = pd.NA
+
+    return df
+
+# 简洁的两序列堆积柱图（与整体风格一致）
+def build_stack_bar_two_series(x, s1, s2, title, name1="境内", name2="境外", color1=PALETTE[2], color2=PALETTE[5]):
+    bar = Bar(init_opts=opts.InitOpts(bg_color="#FFFFFF"))
+    bar.add_xaxis(x)
+    bar.add_yaxis(name1, s1, stack="sum", category_gap="30%",
+                  itemstyle_opts=opts.ItemStyleOpts(color=color1, opacity=0.85),
+                  label_opts=opts.LabelOpts(is_show=False), z=1)
+    bar.add_yaxis(name2, s2, stack="sum",
+                  itemstyle_opts=opts.ItemStyleOpts(color=color2, opacity=0.85),
+                  label_opts=opts.LabelOpts(is_show=False), z=1)
+    bar.set_global_opts(
+        title_opts=opts.TitleOpts(title=title, pos_left="center", title_textstyle_opts=opts.TextStyleOpts(color="#111827")),
+        tooltip_opts=opts.TooltipOpts(trigger="axis", axis_pointer_type="shadow"),
+        xaxis_opts=opts.AxisOpts(type_="category", boundary_gap=True),
+        yaxis_opts=opts.AxisOpts(name="金额"),
+        legend_opts=opts.LegendOpts(orient="horizontal", pos_top="40"),
+        datazoom_opts=[opts.DataZoomOpts(type_="inside"), opts.DataZoomOpts(type_="slider")],
+        toolbox_opts=opts.ToolboxOpts(is_show=True, feature=opts.ToolBoxFeatureOpts(
+            save_as_image=opts.ToolBoxFeatureSaveAsImageOpts(),
+            data_view=opts.ToolBoxFeatureDataViewOpts(is_show=True),
+            data_zoom=opts.ToolBoxFeatureDataZoomOpts(),
+            restore=opts.ToolBoxFeatureRestoreOpts(),
+        )),
+    )
+    return bar
+
+# 堆积柱 + 同比折线（右轴）
+def build_stack_bar_two_series_with_yoy(x, s1, s2, yoy_pct, title, name1="境内", name2="境外", color1=PALETTE[2], color2=PALETTE[5], line_color=PALETTE[6]):
+    from math import floor, ceil
+    xs = [v for v in (yoy_pct or []) if v is not None and not pd.isna(v)]
+    if xs:
+        vmin, vmax = min(xs), max(xs)
+        if vmin == vmax:
+            vmin -= 5; vmax += 5
+        span = vmax - vmin
+        vmin -= span * 0.1; vmax += span * 0.1
+        nice_min = floor(vmin / 5.0) * 5
+        nice_max = ceil(vmax / 5.0) * 5
+        nice_min = min(nice_min, 0)
+        nice_max = max(nice_max, 0)
+        if nice_max - nice_min < 10:
+            nice_max = nice_min + 10
+    else:
+        nice_min, nice_max = None, None
+
+    bar = Bar(init_opts=opts.InitOpts(bg_color="#FFFFFF"))
+    bar.add_xaxis(x)
+    bar.add_yaxis(name1, s1, stack="sum", category_gap="30%",
+                  itemstyle_opts=opts.ItemStyleOpts(color=color1, opacity=0.85),
+                  label_opts=opts.LabelOpts(is_show=False), z=1)
+    bar.add_yaxis(name2, s2, stack="sum",
+                  itemstyle_opts=opts.ItemStyleOpts(color=color2, opacity=0.85),
+                  label_opts=opts.LabelOpts(is_show=False), z=1)
+    bar.extend_axis(yaxis=opts.AxisOpts(name="同比", type_="value", position="right",
+                                        axislabel_opts=opts.LabelOpts(formatter="{value}%"),
+                                        min_=nice_min, max_=nice_max))
+    bar.set_global_opts(
+        title_opts=opts.TitleOpts(title=title, pos_left="center", title_textstyle_opts=opts.TextStyleOpts(color="#111827")),
+        tooltip_opts=opts.TooltipOpts(trigger="axis", axis_pointer_type="shadow"),
+        xaxis_opts=opts.AxisOpts(type_="category", boundary_gap=True),
+        yaxis_opts=opts.AxisOpts(name="金额"),
+        legend_opts=opts.LegendOpts(orient="horizontal", pos_top="40"),
+        datazoom_opts=[opts.DataZoomOpts(type_="inside"), opts.DataZoomOpts(type_="slider")],
+        toolbox_opts=opts.ToolboxOpts(is_show=True, feature=opts.ToolBoxFeatureOpts(
+            save_as_image=opts.ToolBoxFeatureSaveAsImageOpts(),
+            data_view=opts.ToolBoxFeatureDataViewOpts(is_show=True),
+            data_zoom=opts.ToolBoxFeatureDataZoomOpts(),
+            restore=opts.ToolBoxFeatureRestoreOpts(),
+        )),
+    )
+    line = Line()
+    line.add_xaxis(x)
+    line.add_yaxis("同比", [None if pd.isna(v) else v for v in yoy_pct], yaxis_index=1,
+                   is_smooth=False, is_symbol_show=True, symbol="circle", symbol_size=7,
+                   linestyle_opts=opts.LineStyleOpts(width=2.2, color=line_color),
+                   itemstyle_opts=opts.ItemStyleOpts(color=line_color), z=100)
+    return bar.overlap(line)
 def build_bar_line_dual_axis(x_list, amt_list, yoy_pct_list, amt_name, title, bar_color=None, line_color=None):
     """
     左轴金额(柱)，右轴同比%(线)。莫兰迪配色更柔和，与背景协调；折线与柱状色彩区分明显。
@@ -439,8 +870,6 @@ def build_bar_line_dual_axis(x_list, amt_list, yoy_pct_list, amt_name, title, ba
         return nice_min, nice_max
 
     nice_min, nice_max = _nice_percent_axis(yoy_pct_list)
-
-    nice_min, nice_max = _nice_percent_axis(yoy_pct_list)
     bar_color = bar_color or PALETTE[5]
     line_color = line_color or PALETTE[6]
     bar = Bar(init_opts=opts.InitOpts(bg_color="#FFFFFF", width="100%"))
@@ -450,8 +879,8 @@ def build_bar_line_dual_axis(x_list, amt_list, yoy_pct_list, amt_name, title, ba
         y_axis=amt_list,
         label_opts=opts.LabelOpts(is_show=False),
         category_gap="35%",
-        # 柱子采用莫兰迪的冷灰蓝，略透明，更协调
-        itemstyle_opts=opts.ItemStyleOpts(color=bar_color, opacity=0.82, border_radius=[6, 6, 0, 0]),
+        # 柱子顶部改为平顶（无圆角）
+        itemstyle_opts=opts.ItemStyleOpts(color=bar_color, opacity=0.82, border_radius=[0, 0, 0, 0]),
         z=1,
     )
     # 右侧第二坐标轴：同比（%）
@@ -489,7 +918,7 @@ def build_bar_line_dual_axis(x_list, amt_list, yoy_pct_list, amt_name, title, ba
         y_axis=yoy_pct_list,
         yaxis_index=1,
         label_opts=opts.LabelOpts(is_show=False),
-        is_smooth=True,
+        is_smooth=False,
         is_symbol_show=True,
         symbol_size=6,
         z=10,
@@ -525,14 +954,42 @@ if data and "杭州市" in data and not data["杭州市"].empty:
 
 with st.sidebar:
     st.header("页面选择")
-    _page_options = ["海关综合看板", "海关产品类别看板", "机构外币存贷款看板"]
-    _page_labels = {"海关综合看板": "📊 海关综合看板", "海关产品类别看板": "📦 海关产品类别看板", "机构外币存贷款看板": "💱 机构外币存贷款看板"}
+    # 先选分类，再选页面
+    _categories = ["海关数据", "银行数据", "汇率数据"]
+    _category_labels = {
+        "海关数据": "🧭 海关数据",
+        "银行数据": "🏦 银行数据",
+        "汇率数据": "💹 汇率数据",
+    }
+    category = st.radio(
+        "选择分类",
+        _categories,
+        index=0,
+        horizontal=False,
+        format_func=lambda x: _category_labels.get(x, x),
+        key="page_category",
+    )
+
+    _group_pages = {
+        "海关数据": ["海关综合看板", "海关产品类别看板"],
+        "银行数据": ["机构外币存贷款看板", "银行结售汇"],
+        "汇率数据": ["汇率数据"],  # 暂时占位
+    }
+    _page_options = _group_pages.get(category, [])
+    _page_labels = {
+        "海关综合看板": "📊 海关综合看板",
+        "海关产品类别看板": "📦 海关产品类别看板",
+        "机构外币存贷款看板": "💱 机构外币存贷款看板",
+        "银行结售汇": "🏦 银行结售汇",
+        "汇率数据": "💹 汇率数据（建设中）",
+    }
     page = st.radio(
         "选择页面",
         _page_options,
         index=0,
         horizontal=False,
         format_func=lambda x: _page_labels.get(x, x),
+        key="page_select",
     )
     st.markdown("---")
 
@@ -542,12 +999,12 @@ with st.sidebar:
             st.caption(latest_info)
 
         if latest_info_zhejiang:
-            st.caption(latest_info_zhejiang)    
+            st.caption(latest_info_zhejiang)
 
 
         st.header("地区筛选")
         default_index = FINAL_LOCATIONS.index("浙江省") if "浙江省" in FINAL_LOCATIONS else 0
-        selected_location = st.selectbox("", options=FINAL_LOCATIONS, index=default_index)
+        selected_location = st.selectbox("选择地区", options=FINAL_LOCATIONS, index=default_index, label_visibility="collapsed")
 
         st.header("展示设置")
         show_overview = st.checkbox("显示全国与重点地区概览", value=True)
@@ -555,7 +1012,7 @@ with st.sidebar:
     elif page == "海关产品类别看板":  # 产品类别看板
         st.header("数据控制面板")
 
-       
+
         if "cat_filters_visible" not in st.session_state:
             st.session_state["cat_filters_visible"] = True
 
@@ -565,7 +1022,7 @@ with st.sidebar:
         def show_cat_filters():
             st.session_state["cat_filters_visible"] = True
 
-        category_data_sidebar = load_category_data()
+        category_data_sidebar = load_category_data2()
         all_regions_sidebar = []
         if category_data_sidebar:
             sample_sheet = list(category_data_sidebar.keys())[0]
@@ -574,7 +1031,7 @@ with st.sidebar:
         if st.session_state.get("cat_filters_visible", True):
             st.subheader("币种")
             st.radio(
-                "选择币种:",
+                "选择币种：",
                 options=["美元", "人民币"],
                 index=0,
                 horizontal=True,
@@ -584,13 +1041,13 @@ with st.sidebar:
             st.subheader("地区筛选")
             default_regions = all_regions_sidebar[:6] if len(all_regions_sidebar) >= 6 else all_regions_sidebar
             st.multiselect(
-                "选择要显示的地区:",
+                "选择要显示的地区：",
                 options=all_regions_sidebar,
                 default=default_regions,
                 key="cat_selected_regions",
                 help="最多选择8个地区以保证图表清晰度",
             )
-            
+
             if st.session_state.get("cat_selected_regions") and len(st.session_state["cat_selected_regions"]) > 8:
                 st.warning("为保证图表清晰度，建议最多选择8个地区")
                 st.session_state["cat_selected_regions"] = st.session_state["cat_selected_regions"][:8]
@@ -599,8 +1056,8 @@ with st.sidebar:
             st.subheader("产品类别")
             st.multiselect(
                 "选择要显示的产品类别:",
-                options=CATEGORY_ORDER,
-                default=CATEGORY_ORDER,
+                options=CATEGORY_LABELS,
+                default=CATEGORY_LABELS,
                 key="cat_selected_categories",
                 help="可以选择部分类别进行对比分析",
             )
@@ -608,10 +1065,10 @@ with st.sidebar:
             st.markdown("---")
             st.button("应用并隐藏筛选", type="primary", use_container_width=True, on_click=hide_cat_filters)
         else:
-            
+
             cur = st.session_state.get("cat_currency", "美元")
             regs = st.session_state.get("cat_selected_regions", [])
-            cats = st.session_state.get("cat_selected_categories", CATEGORY_ORDER)
+            cats = st.session_state.get("cat_selected_categories", CATEGORY_LABELS)
 
             def summarize(items):
                 if not items:
@@ -634,7 +1091,7 @@ if page == "海关综合看板":
         st.info("未检测到数据文件，请先运行数据处理脚本生成 Excel。")
         st.stop()
 
-    
+
     if show_overview:
         nat = data.get("全国")
         if nat is not None and not nat.empty:
@@ -647,18 +1104,11 @@ if page == "海关综合看板":
                 ("出口 (年初至今)", latest_row.get("出口_年初至今"), latest_row.get("出口_年初至今同比")),
             ]
             for c, (label, val, yoy) in zip(cols, metrics):
-                cls, delta = fmt_delta(yoy)
-                chip_html = f'<span class="chip {cls}">{delta}</span>' if delta else ""
-                c.markdown(
-                    f"""
-                    <div class=\"card\">\n                      <div class=\"label\">{label}</div>\n                      <div class=\"value\">{fmt_value(val)}</div>\n                      {chip_html}\n                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                c.markdown(render_card(label, val, yoy), unsafe_allow_html=True)
 
     st.markdown("<hr/>", unsafe_allow_html=True)
 
-    
+
     top_regions = ["北京市", "上海市", "深圳市", "南京市", "合肥市", "浙江省"]
     if show_overview:
         st.subheader("重点地区数据概览(单位:万元)")
@@ -675,14 +1125,7 @@ if page == "海关综合看板":
                 ("出口(年初至今)", latest.get("出口_年初至今"), latest.get("出口_年初至今同比")),
             ]
             for c, (label, val, yoy) in zip(cards, metrics):
-                cls, delta = fmt_delta(yoy)
-                chip_html = f'<span class="chip {cls}">{delta}</span>' if delta else ""
-                c.markdown(
-                    f"""
-                    <div class=\"card\">\n                      <div class=\"label\">{label}</div>\n                      <div class=\"value\">{fmt_value(val)}</div>\n                      {chip_html}\n                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                c.markdown(render_card(label, val, yoy), unsafe_allow_html=True)
 
             if loc == "浙江省":
                 ZHEJIANG_CITIES = ["杭州市", "宁波市", "温州市", "湖州市", "金华市", "台州市", "嘉兴市", "丽水市", "衢州市", "绍兴市", "舟山市"]
@@ -700,25 +1143,18 @@ if page == "海关综合看板":
                             ("出口(年初至今)", latest_city.get("出口_年初至今"), latest_city.get("出口_年初至今同比")),
                         ]
                         for c, (label, val, yoy) in zip(city_cols, city_metrics):
-                            cls, delta = fmt_delta(yoy)
-                            chip_html = f'<span class="chip {cls}">{delta}</span>' if delta else ""
-                            c.markdown(
-                                f"""
-                                <div class=\"card\">\n                                  <div class=\"label\">{label}</div>\n                                  <div class=\"value\">{fmt_value(val)}</div>\n                                  {chip_html}\n                                </div>
-                                """,
-                                unsafe_allow_html=True,
-                            )
+                            c.markdown(render_card(label, val, yoy), unsafe_allow_html=True)
 
     st.markdown("<hr/>", unsafe_allow_html=True)
 
-    
+
     st.subheader(f"{selected_location} · 详细数据与走势")
     loc_df = data.get(selected_location)
     if loc_df is None or loc_df.empty:
         st.warning(f"未找到 {selected_location} 的数据")
     else:
         loc_df_sorted = loc_df.copy()
-        loc_df_sorted["时间"] = pd.to_datetime(loc_df_sorted["时间"])  
+        loc_df_sorted["时间"] = pd.to_datetime(loc_df_sorted["时间"])
         loc_df_sorted.sort_values("时间", inplace=True)
         x_axis = loc_df_sorted["时间"].dt.strftime("%Y-%m").tolist()
 
@@ -748,12 +1184,12 @@ if page == "海关综合看板":
 
 
 elif page == "海关产品类别看板":
-    category_data = load_category_data()
+    category_data = load_category_data2()
     if not category_data:
         st.error("未找到数据文件 '9大类产品分析表.xlsx'，请先运行数据处理脚本生成Excel文件。")
         st.stop()
 
-    
+
     currency = st.session_state.get("cat_currency", "美元")
     all_regions_for_page = []
     try:
@@ -765,7 +1201,7 @@ elif page == "海关产品类别看板":
     selected_regions = st.session_state.get("cat_selected_regions", default_regions_page)
     if selected_regions and len(selected_regions) > 8:
         selected_regions = selected_regions[:8]
-    selected_categories = st.session_state.get("cat_selected_categories", CATEGORY_ORDER)
+    selected_categories = st.session_state.get("cat_selected_categories", CATEGORY_LABELS)
 
     st.markdown("## 主要产品类别贸易结构")
     chart_configs = [
@@ -791,12 +1227,10 @@ elif page == "海关产品类别看板":
                     regions=available_regions,
                     categories=available_categories,
                 )
-                st.markdown('<div class="chart-rounded">', unsafe_allow_html=True)
                 chart_height = max(400, len(available_regions) * 60 + 150)
-                st_pyecharts(chart, height=f"{chart_height}px")
-                st.markdown('</div>', unsafe_allow_html=True)
+                show_chart(chart, height=f"{chart_height}px")
 
-                
+
                 col1, col2 = st.columns(2)
                 with col1:
                     st.markdown("**原始金额**")
@@ -821,53 +1255,377 @@ elif page == "海关产品类别看板":
                     )
 
 elif page == "机构外币存贷款看板":
-    st.subheader("金融机构境内外币存款/贷款(亿美元)")
-    fx_df, dep_col, loan_col = load_fx_deposit_loan()
-    if fx_df is None:
-        st.error("未找到数据文件 ‘金融机构外币存贷款.xlsx’ 或格式不符合预期。")
+    st.subheader("金融机构外币存贷款（境内/境外，单位：亿美元）")
+    df = load_fx_deposit_loan()
+    if df is None or df.empty:
+        st.error("未找到外币存贷款数据：请将 含‘外币’‘存贷款’关键字的xlsx 放在当前目录或数据目录（支持2023+任意年份），并保证含有‘境内/境外/住户/非金融企业’等行名。")
     else:
-        # 组装X轴
-        fx_df_display = fx_df.copy()
-        fx_df_display["月份"] = fx_df_display["日期"].dt.strftime("%Y-%m")
-        x_axis = fx_df_display["月份"].tolist()
+        df["月份"] = pd.to_datetime(df["日期"]).dt.strftime("%Y-%m")
+        x_axis = df["月份"].tolist()
 
-        # 存款图
-        dep_amt = fx_df_display[dep_col].tolist()
-        dep_yoy_pct = [(v * 100 if pd.notna(v) else None) for v in fx_df_display["存款同比"].tolist()]
-        dep_chart = build_bar_line_dual_axis(
-            x_list=x_axis,
-            amt_list=dep_amt,
-            yoy_pct_list=dep_yoy_pct,
-            amt_name="外币存款",
-            title="外币存款（金额 & 同比）",
-            bar_color=PALETTE[5],  # teal
-            line_color=PALETTE[6], # orange
-        )
-        st.markdown('<div class="chart-rounded">', unsafe_allow_html=True)
-        st_pyecharts(dep_chart, height="520px")
-        st.markdown('</div>', unsafe_allow_html=True)
+        # 年初至今卡片（外币存款/外币贷款）
+        dates = pd.to_datetime(df["日期"], errors="coerce")
+        def _num_col(series_or_values):
+            s = pd.Series(series_or_values)
+            s = s.astype(str).str.replace(',', '', regex=False).str.replace(' ', '', regex=False)
+            return pd.to_numeric(s, errors="coerce")
+        dep_total_col = df.get("外币存款_合计")
+        if dep_total_col is None:
+            dep_total_col = _num_col(df.get("外币存款_境内", 0)).fillna(0) + _num_col(df.get("外币存款_境外", 0)).fillna(0)
+        else:
+            dep_total_col = _num_col(dep_total_col)
+        loan_total_col = df.get("外币贷款_合计")
+        if loan_total_col is None:
+            loan_total_col = _num_col(df.get("外币贷款_境内", 0)).fillna(0) + _num_col(df.get("外币贷款_境外", 0)).fillna(0)
+        else:
+            loan_total_col = _num_col(loan_total_col)
+        # 使用按年分组的方式计算 YTD 与同比（避免索引/频率问题）
+        if dates.notna().any():
+            year_now = int(dates.max().year)
+        else:
+            year_now = None
+        def _ytd_sum_and_yoy(vals):
+            if year_now is None:
+                return None, None
+            v = pd.Series(vals).astype(float)
+            mask_cur = dates.dt.year == year_now
+            cur_vals = v[mask_cur].dropna()
+            cur_sum = float(cur_vals.sum()) if len(cur_vals) else None
+            mask_prev = dates.dt.year == (year_now - 1)
+            prev_vals = v[mask_prev].dropna()
+            if len(prev_vals):
+                prev_sum = float(prev_vals.sum())
+                yoy = (cur_sum / prev_sum - 1.0) if prev_sum != 0 and cur_sum is not None else None
+            else:
+                yoy = None
+            return cur_sum, yoy
+        ytd_dep, ytd_dep_yoy = _ytd_sum_and_yoy(dep_total_col)
+        ytd_loan, ytd_loan_yoy = _ytd_sum_and_yoy(loan_total_col)
+        c1, c2 = st.columns(2)
+        c1.markdown(render_card("外币存款（年初至今）", ytd_dep, ytd_dep_yoy), unsafe_allow_html=True)
+        c2.markdown(render_card("外币贷款（年初至今）", ytd_loan, ytd_loan_yoy), unsafe_allow_html=True)
+        st.markdown("---")
 
-        # 贷款图
-        loan_amt = fx_df_display[loan_col].tolist()
-        loan_yoy_pct = [(v * 100 if pd.notna(v) else None) for v in fx_df_display["贷款同比"].tolist()]
-        loan_chart = build_bar_line_dual_axis(
-            x_list=x_axis,
-            amt_list=loan_amt,
-            yoy_pct_list=loan_yoy_pct,
-            amt_name="外币贷款",
-            title="外币贷款（金额 & 同比）",
-            bar_color=PALETTE[2],  # mustard
-            line_color=PALETTE[1], # slate blue
+        # 外币存款：境内/境外 堆叠 + 合计同比折线
+        dep_dom = df.get("外币存款_境内", pd.Series([0]*len(df))).round(2).tolist()
+        dep_for = df.get("外币存款_境外", pd.Series([0]*len(df))).round(2).tolist()
+        dep_yoy = df.get("存款同比", pd.Series([None]*len(df))).where(df.get("存款同比").notna(), None).tolist()
+        dep_chart = build_stack_bar_two_series_with_yoy(
+            x_axis, dep_dom, dep_for, dep_yoy, "外币存款（境内/境外）"
         )
-        st.markdown('<div class="chart-rounded">', unsafe_allow_html=True)
-        st_pyecharts(loan_chart, height="520px")
-        st.markdown('</div>', unsafe_allow_html=True)
+        show_chart(dep_chart, height="520px")
+
+        # 外币贷款：境内/境外 堆叠 + 合计同比折线
+        loan_dom = df.get("外币贷款_境内", pd.Series([0]*len(df))).round(2).tolist()
+        loan_for = df.get("外币贷款_境外", pd.Series([0]*len(df))).round(2).tolist()
+        loan_yoy = df.get("贷款同比", pd.Series([None]*len(df))).where(df.get("贷款同比").notna(), None).tolist()
+        loan_chart = build_stack_bar_two_series_with_yoy(
+            x_axis, loan_dom, loan_for, loan_yoy, "外币贷款（境内/境外）"
+        )
+        show_chart(loan_chart, height="520px")
 
         st.markdown("<hr/>", unsafe_allow_html=True)
         st.subheader("明细数据")
-        table = fx_df_display[["月份", dep_col, "存款同比", loan_col, "贷款同比"]].copy()
-        # 格式化
-        table["存款同比"] = table["存款同比"].apply(lambda x: f"{x:.2%}" if pd.notna(x) else "—")
-        table["贷款同比"] = table["贷款同比"].apply(lambda x: f"{x:.2%}" if pd.notna(x) else "—")
-        table.rename(columns={dep_col: "外币存款", loan_col: "外币贷款"}, inplace=True)
+        cols = [
+            "月份",
+            "外币存款_境内","外币存款_境外","外币存款_合计","存款同比",
+            "外币贷款_境内","外币贷款_境外","外币贷款_合计","贷款同比",
+        ]
+        table = df[cols].copy()
+        # 同比改为保留两位小数的实数（不再显示百分号）；卡片显示仍用百分比
+        table["存款同比"] = table["存款同比"].apply(lambda x: round(float(x), 2) if pd.notna(x) else None)
+        table["贷款同比"] = table["贷款同比"].apply(lambda x: round(float(x), 2) if pd.notna(x) else None)
         st.dataframe(table.sort_values("月份", ascending=False), use_container_width=True, hide_index=True)
+
+elif page == "银行结售汇":
+    # 顶部标题与月份窗口（全宽，无额外阴影样式）
+    st.subheader("银行结售汇(亿人民币)")
+    months = st.slider("显示窗口（月）", min_value=12, max_value=120, value=36, step=6, key="bank_fx_months")
+
+    # 即时导入（不再延迟），并启用工具栏以下载图表
+    from pyecharts.commons.utils import JsCode
+    from bank_fx_data import get_dashboard_data, ytd_sum_and_yoy, gross_amount, load_bank_fx
+    import math
+
+    data_fx = get_dashboard_data(months=months)
+    if data_fx is None or data_fx["main"].empty:
+        st.error("未找到或无法解析 ‘银行结售汇数据时间序列.xlsx’ 的人民币月度表，请将文件放在当前运行目录")
+        st.stop()
+
+    main = data_fx["main"].copy()
+    comp = data_fx["comp"].copy()
+    fwd_sign = data_fx["fwd_sign"].copy()
+    fwd_out = data_fx["fwd_out"].copy()
+
+    last_month = main.index.max().strftime("%Y-%m")
+    st.caption(f"更新至：{last_month}")
+
+    # 辅助函数（仅本页使用）
+    def _nice_percent_axis(vals):
+        xs = [v for v in vals if (v is not None and not pd.isna(v))]
+        if not xs:
+            return None, None
+        vmin, vmax = min(xs), max(xs)
+        if vmin == vmax:
+            vmin -= 5
+            vmax += 5
+        span = vmax - vmin
+        vmin -= span * 0.1
+        vmax += span * 0.1
+        nice_min = math.floor(vmin / 5.0) * 5
+        nice_max = math.ceil(vmax / 5.0) * 5
+        nice_min = min(nice_min, 0)
+        nice_max = max(nice_max, 0)
+        if nice_max - nice_min < 10:
+            nice_max = nice_min + 10
+        return nice_min, nice_max
+
+    def build_stack_bar_plus_yoy(x, s1, s2, total_yoy_pct, title, name1, name2):
+        yoy_axis_min, yoy_axis_max = _nice_percent_axis(total_yoy_pct)
+        bar = Bar(init_opts=opts.InitOpts(bg_color="#FFFFFF"))
+        bar.add_xaxis(x)
+        bar.add_yaxis(
+            name1,
+            s1,
+            stack="sum",
+            category_gap="30%",
+            itemstyle_opts=opts.ItemStyleOpts(color=PALETTE[2], opacity=0.85),
+            label_opts=opts.LabelOpts(is_show=False),
+            z=1,
+        )
+        bar.add_yaxis(
+            name2,
+            s2,
+            stack="sum",
+            itemstyle_opts=opts.ItemStyleOpts(color=PALETTE[5], opacity=0.85),
+            label_opts=opts.LabelOpts(is_show=False),
+            z=1,
+        )
+        bar.extend_axis(
+            yaxis=opts.AxisOpts(
+                name="同比",
+                type_="value",
+                position="right",
+                axislabel_opts=opts.LabelOpts(
+                    formatter=JsCode("function(v){return v.toFixed(2)+'%';}")
+                ),
+                min_=yoy_axis_min,
+                max_=yoy_axis_max,
+            )
+        )
+        bar.set_global_opts(
+            title_opts=opts.TitleOpts(
+                title=title,
+                pos_left="center",
+                title_textstyle_opts=opts.TextStyleOpts(color="#111827"),
+            ),
+            tooltip_opts=opts.TooltipOpts(trigger="axis"),
+            xaxis_opts=opts.AxisOpts(type_="category", boundary_gap=True),
+            yaxis_opts=opts.AxisOpts(name="金额（亿元）"),
+            legend_opts=opts.LegendOpts(orient="horizontal", pos_top="40"),
+            datazoom_opts=[opts.DataZoomOpts(type_="inside"), opts.DataZoomOpts(type_="slider")],
+            toolbox_opts=opts.ToolboxOpts(is_show=True, feature=opts.ToolBoxFeatureOpts(
+                save_as_image=opts.ToolBoxFeatureSaveAsImageOpts(),
+                data_view=opts.ToolBoxFeatureDataViewOpts(is_show=True),
+                data_zoom=opts.ToolBoxFeatureDataZoomOpts(),
+                restore=opts.ToolBoxFeatureRestoreOpts(),
+            )),
+        )
+        line = Line()
+        line.add_xaxis(x)
+        line.add_yaxis(
+            "同比",
+            [None if pd.isna(v) else v for v in total_yoy_pct],
+            yaxis_index=1,
+            is_smooth=False,
+            label_opts=opts.LabelOpts(is_show=False),
+            is_symbol_show=True,
+            symbol="circle",
+            symbol_size=7,
+            is_connect_nones=True,
+            linestyle_opts=opts.LineStyleOpts(width=2.2, color=PALETTE[6]),
+            itemstyle_opts=opts.ItemStyleOpts(color=PALETTE[6]),
+            z=100,
+        )
+        return bar.overlap(line)
+
+    def build_bar_plus_yoy(x, amt, yoy_pct, title, bar_color=PALETTE[5], line_color=PALETTE[6]):
+        yoy_axis_min, yoy_axis_max = _nice_percent_axis(yoy_pct)
+        bar = Bar(init_opts=opts.InitOpts(bg_color="#FFFFFF"))
+        bar.add_xaxis(x)
+        bar.add_yaxis(
+            "金额",
+            amt,
+            category_gap="30%",
+            label_opts=opts.LabelOpts(is_show=False),
+            itemstyle_opts=opts.ItemStyleOpts(color=bar_color, opacity=0.85),
+            z=1,
+        )
+        bar.extend_axis(
+            yaxis=opts.AxisOpts(
+                name="同比",
+                type_="value",
+                position="right",
+                axislabel_opts=opts.LabelOpts(
+                    formatter=JsCode("function(v){return v.toFixed(2)+'%';}")
+                ),
+                min_=yoy_axis_min,
+                max_=yoy_axis_max,
+            )
+        )
+        bar.set_global_opts(
+            title_opts=opts.TitleOpts(
+                title=title,
+                pos_left="center",
+                title_textstyle_opts=opts.TextStyleOpts(color="#111827"),
+            ),
+            tooltip_opts=opts.TooltipOpts(trigger="axis"),
+            xaxis_opts=opts.AxisOpts(type_="category", boundary_gap=True),
+            yaxis_opts=opts.AxisOpts(name="金额（亿元）"),
+            legend_opts=opts.LegendOpts(orient="horizontal", pos_top="40"),
+            datazoom_opts=[opts.DataZoomOpts(type_="inside"), opts.DataZoomOpts(type_="slider")],
+            toolbox_opts=opts.ToolboxOpts(is_show=True, feature=opts.ToolBoxFeatureOpts(
+                save_as_image=opts.ToolBoxFeatureSaveAsImageOpts(),
+                data_view=opts.ToolBoxFeatureDataViewOpts(is_show=True),
+                data_zoom=opts.ToolBoxFeatureDataZoomOpts(),
+                restore=opts.ToolBoxFeatureRestoreOpts(),
+            )),
+        )
+        line = Line()
+        line.add_xaxis(x)
+        line.add_yaxis(
+            "同比",
+            [None if pd.isna(v) else v for v in yoy_pct],
+            yaxis_index=1,
+            is_smooth=False,
+            label_opts=opts.LabelOpts(is_show=False),
+            is_symbol_show=True,
+            symbol="circle",
+            symbol_size=7,
+            is_connect_nones=True,
+            linestyle_opts=opts.LineStyleOpts(width=2.2, color=line_color),
+            itemstyle_opts=opts.ItemStyleOpts(color=line_color),
+            z=100,
+        )
+        return bar.overlap(line)
+
+    def build_multi_line(x, series_map: dict, title: str):
+        line = Line(init_opts=opts.InitOpts(bg_color="#FFFFFF"))
+        line.add_xaxis(x)
+        line.set_colors(PALETTE)
+        for name, y in series_map.items():
+            line.add_yaxis(
+                name,
+                y,
+                is_smooth=False,
+                is_connect_nones=True,
+                label_opts=opts.LabelOpts(is_show=False),
+                is_symbol_show=True,
+                symbol="circle",
+                symbol_size=7,
+                linestyle_opts=opts.LineStyleOpts(width=2),
+                z=50,
+            )
+        line.set_global_opts(
+            title_opts=opts.TitleOpts(
+                title=title,
+                pos_left="center",
+                title_textstyle_opts=opts.TextStyleOpts(color="#111827"),
+            ),
+            tooltip_opts=opts.TooltipOpts(trigger="axis"),
+            xaxis_opts=opts.AxisOpts(type_="category", boundary_gap=False),
+            yaxis_opts=opts.AxisOpts(name="金额（亿元）"),
+            legend_opts=opts.LegendOpts(orient="horizontal", pos_top="40"),
+            datazoom_opts=[opts.DataZoomOpts(type_="inside"), opts.DataZoomOpts(type_="slider")],
+            toolbox_opts=opts.ToolboxOpts(is_show=True, feature=opts.ToolBoxFeatureOpts(
+                save_as_image=opts.ToolBoxFeatureSaveAsImageOpts(),
+                data_view=opts.ToolBoxFeatureDataViewOpts(is_show=True),
+                data_zoom=opts.ToolBoxFeatureDataZoomOpts(),
+                restore=opts.ToolBoxFeatureRestoreOpts(),
+            )),
+        )
+        return line
+
+    # YTD 指标卡：使用全量数据计算，避免窗口切换导致YTD被截断
+    _full = load_bank_fx()
+    _src_for_ytd = _full.main if _full and _full.main is not None and not _full.main.empty else main
+    ytd_settle, ytd_settle_yoy, _ = ytd_sum_and_yoy(_src_for_ytd["结汇"])
+    ytd_sale, ytd_sale_yoy, _ = ytd_sum_and_yoy(_src_for_ytd["售汇"])
+    gross_series = gross_amount(_src_for_ytd)
+    ytd_gross, ytd_gross_yoy, _ = ytd_sum_and_yoy(gross_series)
+
+    c1, c2, c3 = st.columns(3)
+    c1.markdown(render_card("结汇（年初至今）", ytd_settle, ytd_settle_yoy), unsafe_allow_html=True)
+    c2.markdown(render_card("售汇（年初至今）", ytd_sale, ytd_sale_yoy), unsafe_allow_html=True)
+    c3.markdown(render_card("结售汇金额（年初至今）", ytd_gross, ytd_gross_yoy), unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # 图1：结汇 经常/资本堆叠 + 合计同比
+    xs = main.index.strftime("%Y-%m").tolist()
+    settle_yoy_pct = (main["结汇同比"] * 100).where(main["结汇同比"].notna(), None).tolist()
+    settle_cur = comp.get("结汇_经常项目", pd.Series(index=main.index)).reindex(main.index).fillna(0).round(2).tolist()
+    settle_cap = comp.get("结汇_资本项目", pd.Series(index=main.index)).reindex(main.index).fillna(0).round(2).tolist()
+    chart1 = build_stack_bar_plus_yoy(
+        xs,
+        settle_cur,
+        settle_cap,
+        settle_yoy_pct,
+        "结汇：经常项目 vs 资本项目(当月)",
+        "经常项目",
+        "资本项目",
+    )
+    show_chart(chart1, height="520px")
+
+    # 图2：售汇 经常/资本堆叠 + 合计同比
+    sale_yoy_pct = (main["售汇同比"] * 100).where(main["售汇同比"].notna(), None).tolist()
+    sale_cur = comp.get("售汇_经常项目", pd.Series(index=main.index)).reindex(main.index).fillna(0).round(2).tolist()
+    sale_cap = comp.get("售汇_资本项目", pd.Series(index=main.index)).reindex(main.index).fillna(0).round(2).tolist()
+    chart2 = build_stack_bar_plus_yoy(
+        xs,
+        sale_cur,
+        sale_cap,
+        sale_yoy_pct,
+        "售汇：经常项目 vs 资本项目(当月)",
+        "经常项目",
+        "资本项目",
+    )
+    show_chart(chart2, height="520px")
+
+    # 图3：结售汇差额（单柱 + 同比）
+    bal_yoy_pct = (main["差额同比"] * 100).where(main["差额同比"].notna(), None).tolist()
+    chart3 = build_bar_plus_yoy(xs, main["差额"].round(2).tolist(), bal_yoy_pct, "结售汇差额(当月)")
+    show_chart(chart3, height="520px")
+
+    # 图4：远期结售汇签约额（多折线）
+    if not fwd_sign.empty:
+        series_map4 = {
+            "结汇": fwd_sign["结汇"].reindex(main.index).round(2).tolist(),
+            "售汇": fwd_sign["售汇"].reindex(main.index).round(2).tolist(),
+            "差额": fwd_sign["差额"].reindex(main.index).round(2).tolist(),
+        }
+        chart4 = build_multi_line(xs, series_map4, "远期结售汇签约额")
+        show_chart(chart4, height="520px")
+
+    # 图5：远期结售汇累计未到期额（多折线）
+    if not fwd_out.empty:
+        series_map5 = {
+            "结汇": fwd_out["结汇"].reindex(main.index).round(2).tolist(),
+            "售汇": fwd_out["售汇"].reindex(main.index).round(2).tolist(),
+            "差额": fwd_out["差额"].reindex(main.index).round(2).tolist(),
+        }
+        chart5 = build_multi_line(xs, series_map5, "远期结售汇累计未到期额")
+        show_chart(chart5, height="520px")
+
+    # 明细数据（直接展示，不折叠）
+    table = main.copy()
+    table.index = table.index.strftime("%Y-%m")
+    st.dataframe(
+        table[["结汇", "售汇", "差额", "结汇同比", "售汇同比", "差额同比"]].sort_index(ascending=False),
+        use_container_width=True,
+        hide_index=False,
+    )
+
+elif page == "汇率数据":
+    st.subheader("汇率数据")
+    st.info("本板块建设中，敬请期待。")
