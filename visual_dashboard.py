@@ -1255,7 +1255,7 @@ elif page == "海关产品类别看板":
                     )
 
 elif page == "机构外币存贷款看板":
-    st.subheader("金融机构外币存贷款（境内/境外，单位：亿美元）")
+    st.subheader("金融机构外币存贷款(亿美元)")
     df = load_fx_deposit_loan()
     if df is None or df.empty:
         st.error("未找到外币存贷款数据：请将 含‘外币’‘存贷款’关键字的xlsx 放在当前目录或数据目录（支持2023+任意年份），并保证含有‘境内/境外/住户/非金融企业’等行名。")
@@ -1310,7 +1310,6 @@ elif page == "机构外币存贷款看板":
         c1, c2 = st.columns(2)
         c1.markdown(render_card("外币存款（年初至今）", ytd_dep, ytd_dep_yoy), unsafe_allow_html=True)
         c2.markdown(render_card("外币贷款（年初至今）", ytd_loan, ytd_loan_yoy), unsafe_allow_html=True)
-        st.markdown("---")
 
         # 外币存款：境内/境外 堆叠 + 合计同比折线
         dep_dom = df.get("外币存款_境内", pd.Series([0]*len(df))).round(2).tolist()
@@ -1565,7 +1564,6 @@ elif page == "银行结售汇":
     c2.markdown(render_card("售汇（年初至今）", ytd_sale, ytd_sale_yoy), unsafe_allow_html=True)
     c3.markdown(render_card("结售汇金额（年初至今）", ytd_gross, ytd_gross_yoy), unsafe_allow_html=True)
 
-    st.markdown("---")
 
     # 图1：结汇 经常/资本堆叠 + 合计同比
     xs = main.index.strftime("%Y-%m").tolist()
