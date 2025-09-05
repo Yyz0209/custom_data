@@ -395,14 +395,16 @@ def build_fedwatch_dot_table(dp_data):
                 iv = int(v)
             except Exception:
                 iv = 0
-            cells.append("" if iv == 0 else iv)
-        # 对齐列数
+            cells.append("" if iv == 0 else str(iv))
         if len(cells) < len(x_labels):
             cells += [""] * (len(x_labels) - len(cells))
-        rows.append([y_labels[yi]] + cells)
-    columns = ["TARGET RATE"] + x_labels
+        rows.append([str(y_labels[yi])] + cells)
+    columns = ["TARGET RATE"] + [str(x) for x in x_labels]
     try:
         df = pd.DataFrame(rows, columns=columns)
+        # 确保所有列都是字符串，避免 Arrow 类型冲突
+        for c in df.columns:
+            df[c] = df[c].astype(str)
     except Exception:
         return None
     return df
@@ -1168,7 +1170,7 @@ with st.sidebar:
 
         st.markdown("---")
         st.subheader("数据更新")
-        if st.button("更新海关统计数据", type="primary", use_container_width=True, key="btn_update_customs"):
+        if st.button("更新海关统计数据", type="primary", width='stretch', key="btn_update_customs"):
             with st.spinner("正在更新海关统计数据，请稍候..."):
                 res = run_data_updater()
             if res.get("success"):
@@ -1239,7 +1241,7 @@ with st.sidebar:
             )
 
             st.markdown("---")
-            st.button("应用并隐藏筛选", type="primary", use_container_width=True, on_click=hide_cat_filters)
+            st.button("应用并隐藏筛选", type="primary", width='stretch', on_click=hide_cat_filters)
         else:
 
             cur = st.session_state.get("cat_currency", "美元")
@@ -1256,7 +1258,7 @@ with st.sidebar:
             st.caption(f"币种：{cur}")
             st.caption(f"地区：{len(regs)} 项（{summarize(regs)}）")
             st.caption(f"产品类别：{len(cats)} 项（{summarize(cats)}）")
-            st.button("编辑筛选", use_container_width=True, on_click=show_cat_filters)
+            st.button("编辑筛选", width='stretch', on_click=show_cat_filters)
 
         st.caption("数据来源：海关总署")
 
@@ -1268,7 +1270,7 @@ with st.sidebar:
             st.subheader("FedWatch 数据更新")
             st.caption("一键从 CME FedWatch 抓取并更新数据（需联网，可能需要代理）")
             proxy = st.text_input("代理（可选）", value=os.environ.get("PLAYWRIGHT_PROXY", ""), key="fedwatch_proxy")
-            if st.button("更新 FedWatch 数据", type="primary", use_container_width=True, key="btn_update_fedwatch"):
+            if st.button("更新 FedWatch 数据", type="primary", width='stretch', key="btn_update_fedwatch"):
                 with st.spinner("正在抓取并更新 FedWatch 数据，请稍候..."):
                     import subprocess as _sp
                     try:
@@ -1443,7 +1445,7 @@ elif page == "海关产品类别看板":
                         display_data[col] = display_data[col].apply(lambda x: f"{x:,.0f}" if pd.notna(x) and x != 0 else "—")
                     st.dataframe(
                         display_data,
-                        use_container_width=True,
+                        width='stretch',
                         height=min(len(available_regions) * 35 + 50, 300),
                     )
                 with col2:
@@ -1454,7 +1456,7 @@ elif page == "海关产品类别看板":
                         percentage_data[col] = percentage_data[col].apply(lambda x: f"{x:.1f}%" if pd.notna(x) and x != 0 else "—")
                     st.dataframe(
                         percentage_data,
-                        use_container_width=True,
+                        width='stretch',
                         height=min(len(available_regions) * 35 + 50, 300),
                     )
 
@@ -1544,7 +1546,7 @@ elif page == "机构外币存贷款看板":
         # 同比改为保留两位小数的实数（不再显示百分号）；卡片显示仍用百分比
         table["存款同比"] = table["存款同比"].apply(lambda x: round(float(x), 2) if pd.notna(x) else None)
         table["贷款同比"] = table["贷款同比"].apply(lambda x: round(float(x), 2) if pd.notna(x) else None)
-        st.dataframe(table.sort_values("月份", ascending=False), use_container_width=True, hide_index=True)
+        st.dataframe(table.sort_values("月份", ascending=False), width='stretch', hide_index=True)
 
 elif page == "银行结售汇":
     # 顶部标题与月份窗口（全宽，无额外阴影样式）
@@ -1830,7 +1832,7 @@ elif page == "银行结售汇":
     table.index = table.index.strftime("%Y-%m")
     st.dataframe(
         table[["结汇", "售汇", "差额", "结汇同比", "售汇同比", "差额同比"]].sort_index(ascending=False),
-        use_container_width=True,
+        width='stretch',
         hide_index=False,
     )
 
@@ -1864,6 +1866,6 @@ elif page == "CME FEDWATCH":
         else:
             df = build_fedwatch_dot_table(dp)
             if df is not None:
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.dataframe(df, width='stretch', hide_index=True)
             else:
                 st.info("点阵表格暂无可展示数据。")
