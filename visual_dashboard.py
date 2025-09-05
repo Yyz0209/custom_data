@@ -3,11 +3,13 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+import json
 
 import pandas as pd
 import streamlit as st
 from pyecharts import options as opts
-from pyecharts.charts import Line, Bar
+from pyecharts.charts import Line, Bar, HeatMap
+from pyecharts.commons.utils import JsCode
 from streamlit_echarts import st_pyecharts
 
 from config import OUTPUT_FILENAME, FINAL_LOCATIONS
@@ -253,6 +255,159 @@ def show_chart(chart, height="520px"):
     st.markdown('<div class="chart-rounded">', unsafe_allow_html=True)
     st_pyecharts(chart, height=height)
     st.markdown('</div>', unsafe_allow_html=True)
+
+# === CME FedWatch loaders and charts ===
+@st.cache_data
+def load_fedwatch_probabilities(path: str = os.path.join("outputs", "fedwatch_probabilities.json")):
+    try:
+        if not os.path.exists(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        rows = obj.get("rows", [])
+        if not rows:
+            return None
+        header_row = rows[0]
+        x_labels = [str(x).strip() for x in header_row[1:]]
+        data_rows = rows[1:]
+        y_labels = [r[0] for r in data_rows]
+        # values matrix as floats (%), missing -> None
+        def _to_num(s):
+            s = str(s).strip()
+            if not s or s == "—":
+                return None
+            s = s.replace("%", "")
+            try:
+                return float(s)
+            except Exception:
+                return None
+        matrix = [[_to_num(v) for v in r[1:1+len(x_labels)]] for r in data_rows]
+        return {"x": x_labels, "y": y_labels, "z": matrix}
+    except Exception:
+        return None
+
+
+def build_fedwatch_heatmap(prob_data, title=""):
+    if not prob_data:
+        return None
+    x_labels = prob_data["x"]
+    # 需求：日期早的在上面 -> 反转 y 与矩阵行
+    y_labels_orig = prob_data["y"]
+    z_orig = prob_data["z"]
+    y_labels = list(reversed(y_labels_orig))
+    z = list(reversed(z_orig))
+    # HeatMap requires list of [x_index, y_index, value]
+    data = []
+    vmax = 0
+    for yi, row in enumerate(z):
+        for xi, v in enumerate(row):
+            if v is None:
+                continue
+            vmax = max(vmax, v)
+            data.append([xi, yi, float(v)])
+    vmax = max(vmax, 100)
+    hm = HeatMap(init_opts=opts.InitOpts(bg_color="#FFFFFF", width="100%"))
+    hm.add_xaxis(x_labels)
+    hm.add_yaxis(
+        "概率(%)",
+        y_labels,
+        data,
+        label_opts=opts.LabelOpts(
+            is_show=True,
+            color="#2D2A26",
+            formatter=JsCode("function(p){return (p.value[2]).toFixed(1)+'%';}")
+        ),
+        itemstyle_opts=opts.ItemStyleOpts(border_color="#E6E1DA", border_width=1)
+    )
+    hm.set_global_opts(
+        title_opts=opts.TitleOpts(title=""),
+        tooltip_opts=opts.TooltipOpts(is_show=True, formatter=JsCode("function(p){return p.name + '<br/>概率: ' + (p.value[2]).toFixed(1) + '%';}")),
+        xaxis_opts=opts.AxisOpts(axislabel_opts=opts.LabelOpts(rotate=30)),
+        yaxis_opts=opts.AxisOpts(axislabel_opts=opts.LabelOpts(rotate=0)),
+        visualmap_opts=opts.VisualMapOpts(
+            max_=100,
+            min_=0,
+            orient="vertical",
+            pos_right="10",
+            pos_top="middle",
+            range_color=["#ffffff", "#fff3cd", "#ffe08a", "#cdeaf7", "#8fd3f4", "#4aa3e0"]
+        )
+    )
+    return hm
+
+
+@st.cache_data
+def load_fedwatch_dotplot(path: str = os.path.join("outputs", "fedwatch_dot_plot_table.json")):
+    try:
+        if not os.path.exists(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        header = obj.get("header", [])
+        rows = obj.get("rows", [])
+        if not header or not rows:
+            return None
+        x_labels = [str(h).strip() for h in header[1:]]
+        # y labels are target rates, sort descending numerically
+        def _num_rate(s):
+            try:
+                return float(str(s).strip())
+            except Exception:
+                return None
+        y_pairs = [(_num_rate(r[0]), str(r[0])) for r in rows]
+        y_pairs = [p for p in y_pairs if p[0] is not None]
+        y_pairs.sort(key=lambda p: p[0], reverse=True)
+        y_labels = [p[1] for p in y_pairs]
+        # build value dict
+        row_by_rate = {str(r[0]): r[1:] for r in rows}
+        matrix = []
+        for y in y_labels:
+            r = row_by_rate.get(y, [])
+            vals = []
+            for v in r[:len(x_labels)]:
+                s = str(v).strip()
+                vals.append(int(s) if s.isdigit() else 0)
+            matrix.append(vals)
+        return {"x": x_labels, "y": y_labels, "z": matrix}
+    except Exception:
+        return None
+
+
+
+
+
+def build_fedwatch_dot_table(dp_data):
+    """将点阵数据转成表格（DataFrame）展示。
+    第一列为 TARGET RATE，后续为各年份/长期列；0 显示为空白。
+    """
+    if not dp_data:
+        return None
+    x_labels = dp_data.get("x", [])
+    y_labels = dp_data.get("y", [])
+    z = dp_data.get("z", [])
+    if not x_labels or not y_labels or not z:
+        return None
+    rows = []
+    for yi, row in enumerate(z):
+        cells = []
+        for v in row[: len(x_labels)]:
+            try:
+                iv = int(v)
+            except Exception:
+                iv = 0
+            cells.append("" if iv == 0 else iv)
+        # 对齐列数
+        if len(cells) < len(x_labels):
+            cells += [""] * (len(x_labels) - len(cells))
+        rows.append([y_labels[yi]] + cells)
+    columns = ["TARGET RATE"] + x_labels
+    try:
+        df = pd.DataFrame(rows, columns=columns)
+    except Exception:
+        return None
+    return df
+
+
 
 
 def build_line(x_list, series_dict, title):
@@ -955,11 +1110,11 @@ if data and "杭州市" in data and not data["杭州市"].empty:
 with st.sidebar:
     st.header("页面选择")
     # 先选分类，再选页面
-    _categories = ["海关数据", "银行数据", "汇率数据"]
+    _categories = ["海关数据", "银行数据", "宏观数据"]
     _category_labels = {
         "海关数据": "🧭 海关数据",
         "银行数据": "🏦 银行数据",
-        "汇率数据": "💹 汇率数据",
+        "宏观数据": "🌐 宏观数据",
     }
     category = st.radio(
         "选择分类",
@@ -973,7 +1128,7 @@ with st.sidebar:
     _group_pages = {
         "海关数据": ["海关综合看板", "海关产品类别看板"],
         "银行数据": ["机构外币存贷款看板", "银行结售汇"],
-        "汇率数据": ["汇率数据"],  # 暂时占位
+        "宏观数据": ["汇率数据", "CME FEDWATCH"],
     }
     _page_options = _group_pages.get(category, [])
     _page_labels = {
@@ -981,7 +1136,8 @@ with st.sidebar:
         "海关产品类别看板": "📦 海关产品类别看板",
         "机构外币存贷款看板": "💱 机构外币存贷款看板",
         "银行结售汇": "🏦 银行结售汇",
-        "汇率数据": "💹 汇率数据（建设中）",
+        "汇率数据": "💹 汇率数据",
+        "CME FEDWATCH": "📈 CME FedWatch",
     }
     page = st.radio(
         "选择页面",
@@ -1008,6 +1164,26 @@ with st.sidebar:
 
         st.header("展示设置")
         show_overview = st.checkbox("显示全国与重点地区概览", value=True)
+
+
+        st.markdown("---")
+        st.subheader("数据更新")
+        if st.button("更新海关统计数据", type="primary", use_container_width=True, key="btn_update_customs"):
+            with st.spinner("正在更新海关统计数据，请稍候..."):
+                res = run_data_updater()
+            if res.get("success"):
+                st.success(res.get("message", "更新完成"))
+                if res.get("output"):
+                    st.text_area("输出", res.get("output", ""), height=160)
+                try:
+                    st.rerun()
+                except Exception:
+                    try:
+                        st.experimental_rerun()
+                    except Exception:
+                        pass
+            else:
+                st.error(res.get("message", "更新失败"))
 
     elif page == "海关产品类别看板":  # 产品类别看板
         st.header("数据控制面板")
@@ -1084,6 +1260,45 @@ with st.sidebar:
 
         st.caption("数据来源：海关总署")
 
+# ——— FedWatch：侧边栏更新按钮（全局，在页面选择下方） ———
+with st.sidebar:
+    try:
+        if st.session_state.get("page_select") == "CME FEDWATCH":
+            st.markdown("---")
+            st.subheader("FedWatch 数据更新")
+            st.caption("一键从 CME FedWatch 抓取并更新数据（需联网，可能需要代理）")
+            proxy = st.text_input("代理（可选）", value=os.environ.get("PLAYWRIGHT_PROXY", ""), key="fedwatch_proxy")
+            if st.button("更新 FedWatch 数据", type="primary", use_container_width=True, key="btn_update_fedwatch"):
+                with st.spinner("正在抓取并更新 FedWatch 数据，请稍候..."):
+                    import subprocess as _sp
+                    try:
+                        env = os.environ.copy()
+                        if proxy:
+                            env["PLAYWRIGHT_PROXY"] = proxy
+                        result = _sp.run(
+                            [sys.executable, os.path.join("scripts", "cme_fedwatch_scrape.py")],
+                            capture_output=True,
+                            text=True,
+                            encoding="utf-8",
+                            errors="ignore",
+                            timeout=600,
+                            env=env,
+                        )
+                        if result.returncode == 0:
+                            st.success("FedWatch 数据更新完成，已写入 outputs/ 目录！")
+                            if result.stdout:
+                                st.text_area("输出", result.stdout, height=160)
+                        else:
+                            st.error("更新失败")
+                            st.text_area("错误输出", result.stderr or result.stdout, height=180)
+                    except _sp.TimeoutExpired:
+                        st.error("更新超时（超过10分钟）。")
+                    except Exception as e:
+                        st.error(f"更新过程中出错：{e}")
+    except Exception:
+        pass
+
+
 
 
 if page == "海关综合看板":
@@ -1135,15 +1350,7 @@ if page == "海关综合看板":
                         if city_df is None or city_df.empty:
                             continue
                         latest_city = city_df.iloc[city_df["时间"].map(pd.to_datetime).idxmax()]
-                        st.markdown(f"#### {city}")
-                        city_cols = st.columns(3)
-                        city_metrics = [
-                            ("进出口(年初至今)", latest_city.get("进出口_年初至今"), latest_city.get("进出口_年初至今同比")),
-                            ("进口(年初至今)", latest_city.get("进口_年初至今"), latest_city.get("进口_年初至今同比")),
-                            ("出口(年初至今)", latest_city.get("出口_年初至今"), latest_city.get("出口_年初至今同比")),
-                        ]
-                        for c, (label, val, yoy) in zip(city_cols, city_metrics):
-                            c.markdown(render_card(label, val, yoy), unsafe_allow_html=True)
+
 
     st.markdown("<hr/>", unsafe_allow_html=True)
 
@@ -1176,11 +1383,8 @@ if page == "海关综合看板":
                 if "同比" in col:
                     disp[col] = disp[col].apply(lambda v: f"{v:.2%}" if pd.notna(v) else "—")
             disp["时间"] = disp["时间"].dt.strftime("%Y-%m")
-            st.dataframe(
-                disp.sort_values("时间", ascending=False),
-                use_container_width=True,
-                hide_index=True,
-            )
+
+
 
 
 elif page == "海关产品类别看板":
@@ -1633,3 +1837,33 @@ elif page == "银行结售汇":
 elif page == "汇率数据":
     st.subheader("汇率数据")
     st.info("本板块建设中，敬请期待。")
+
+
+elif page == "CME FEDWATCH":
+    st.subheader("CME FedWatch")
+    st.caption("数据来源：CME FedWatch")
+    colA, colB = st.columns(2)
+    with colA:
+        st.markdown("**降息概率矩阵**")
+    with colB:
+        st.markdown("**点阵表格**")
+
+    tab1, tab2 = st.tabs(["降息概率矩阵图", "点阵表格"])
+    with tab1:
+        prob = load_fedwatch_probabilities()
+        if not prob:
+            st.warning("未找到或无法解析 outputs/fedwatch_probabilities.json")
+        else:
+            hm = build_fedwatch_heatmap(prob)
+            if hm:
+                show_chart(hm, height="640px")
+    with tab2:
+        dp = load_fedwatch_dotplot()
+        if not dp:
+            st.warning("未找到或无法解析 outputs/fedwatch_dot_plot_table.json")
+        else:
+            df = build_fedwatch_dot_table(dp)
+            if df is not None:
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            else:
+                st.info("点阵表格暂无可展示数据。")
