@@ -1277,25 +1277,18 @@ with st.sidebar:
                         env = os.environ.copy()
                         if proxy:
                             env["PLAYWRIGHT_PROXY"] = proxy
-                        # 先尝试安装浏览器（幂等，已安装则很快返回）
-                        # 确保浏览器装到本地缓存（Cloud 允许该路径写入）
+                        # 先尝试安装浏览器（按照用户提供的方法）
+                        import os as _os
                         env["PLAYWRIGHT_BROWSERS_PATH"] = "0"
-                        inst = _sp.run(
-                            [sys.executable, "-m", "playwright", "install", "chromium", "chromium-headless-shell"],
-                            capture_output=True,
-                            text=True,
-                            encoding="utf-8",
-                            errors="ignore",
-                            timeout=900,
-                            env=env,
-                        )
-                        if inst.returncode != 0:
-                            st.warning("浏览器安装步骤返回非零状态，可能已安装或网络受限。将继续尝试抓取…")
-                            if inst.stderr:
-                                st.text_area("安装输出(错误)", inst.stderr, height=120)
-                        elif inst.stdout:
-                            st.text_area("安装输出", inst.stdout, height=120)
-                        # 诊断 playwright 版本 & 浏览器列表
+                        st.write("正在安装 Playwright…")
+                        rc1 = _os.system("playwright install")
+                        st.write(f"playwright install 返回码: {rc1}")
+                        st.write("正在安装 Playwright 依赖…")
+                        rc2 = _os.system("playwright install-deps")
+                        st.write(f"playwright install-deps 返回码: {rc2}")
+                        if rc1 == 0:
+                            st.success("Playwright installed.")
+                        # 诊断 playwright 版本
                         diag = _sp.run(
                             [sys.executable, "-m", "playwright", "--version"],
                             capture_output=True, text=True, encoding="utf-8", errors="ignore", env=env
