@@ -1,7 +1,4 @@
 import os
-os.system('playwright install')
-os.system('playwright install-deps')
-
 import subprocess
 import sys
 import time
@@ -1897,4 +1894,5 @@ elif page == "CME FEDWATCH":
                 st.dataframe(df, width='stretch', hide_index=True)
             else:
                 st.info("点阵表格暂无可展示数据。")
+
 
