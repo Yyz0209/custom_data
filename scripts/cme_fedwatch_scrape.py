@@ -12,6 +12,7 @@ def open_with_fallback(p):
     proxy = _get_proxy_from_env()
     candidates = [
         ("chromium", {"headless": True}),
+        ("chromium", {"headless": True, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}),
         ("chromium", {"headless": True, "args": ["--disable-http2", "--disable-quic"]}),
         ("firefox", {"headless": True}),
         ("webkit", {"headless": True}),
@@ -47,6 +48,15 @@ def _get_proxy_from_env():
         if v:
             return {"server": v}
     return None
+
+
+# Ensure Chromium browser is available (Streamlit Cloud etc.)
+# This downloads the browser binaries if missing; harmless if already installed.
+try:
+    import subprocess as _sp
+    _sp.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False, capture_output=True)
+except Exception:
+    pass
 
 EVAL_PARSE_TABLE = """
 (el) => {
