@@ -38,6 +38,14 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+
+# 确保 Playwright 浏览器已安装（云端环境需要）
+try:
+    import subprocess as _sp
+    _sp.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False, capture_output=True)
+except Exception:
+    pass
+
 logger = logging.getLogger(__name__)
 
 
