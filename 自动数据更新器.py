@@ -29,6 +29,13 @@ from data_utils import (
     save_raw_df, consolidate_with_yoy, export_to_excel_by_location
 )
 
+# 云端强制启用无头模式（无 DISPLAY 时）
+try:
+    if not os.environ.get("DISPLAY"):
+        HEADLESS = True  # 覆盖配置中的 HEADLESS，避免 X server 错误
+except Exception:
+    pass
+
 # 设置日志
 logging.basicConfig(
     level=logging.INFO,

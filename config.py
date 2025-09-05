@@ -9,12 +9,13 @@ BASE_URL = (
 )
 
 # 浏览器与网络
+import os
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/99.0.4844.84 Safari/537.36"
 )
-# 调试/稳定性：部分站点会拦截无头浏览器，建议默认可见窗口
-HEADLESS = False
+# 在云端（无 DISPLAY）必须 headless 运行；允许用环境变量 PLAYWRIGHT_HEADLESS=0 在本地开发时打开可见窗口
+HEADLESS = (os.environ.get("PLAYWRIGHT_HEADLESS", "1") != "0")
 
 # 网络/超时配置（适配慢网与代理场景）
 # 页面导航最大等待（毫秒）
