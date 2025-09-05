@@ -1277,6 +1277,32 @@ with st.sidebar:
                         env = os.environ.copy()
                         if proxy:
                             env["PLAYWRIGHT_PROXY"] = proxy
+                        # 先尝试安装浏览器（幂等，已安装则很快返回）
+                        # 确保浏览器装到本地缓存（Cloud 允许该路径写入）
+                        env["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+                        inst = _sp.run(
+                            [sys.executable, "-m", "playwright", "install", "chromium"],
+                            capture_output=True,
+                            text=True,
+                            encoding="utf-8",
+                            errors="ignore",
+                            timeout=600,
+                            env=env,
+                        )
+                        if inst.returncode != 0:
+                            st.warning("浏览器安装步骤返回非零状态，可能已安装或网络受限。将继续尝试抓取…")
+                            if inst.stderr:
+                                st.text_area("安装输出(错误)", inst.stderr, height=120)
+                        elif inst.stdout:
+                            st.text_area("安装输出", inst.stdout, height=120)
+                        # 诊断 playwright 版本
+                        diag = _sp.run(
+                            [sys.executable, "-m", "playwright", "--version"],
+                            capture_output=True, text=True, encoding="utf-8", errors="ignore", env=env
+                        )
+                        if diag.stdout:
+                            st.caption(f"Playwright 版本: {diag.stdout.strip()}")
+                        # 正式抓取
                         result = _sp.run(
                             [sys.executable, os.path.join("scripts", "cme_fedwatch_scrape.py")],
                             capture_output=True,

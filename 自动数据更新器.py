@@ -49,9 +49,11 @@ logging.basicConfig(
 # 确保 Playwright 浏览器已安装（云端环境需要）
 try:
     import subprocess as _sp
-    _sp.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False, capture_output=True)
-except Exception:
-    pass
+    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
+    print("[Playwright] Installing chromium to local cache (PLAYWRIGHT_BROWSERS_PATH=0)…", flush=True)
+    _sp.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False, capture_output=False)
+except Exception as _e:
+    print(f"[Playwright] Install step skipped/failed: {_e}", flush=True)
 
 logger = logging.getLogger(__name__)
 
