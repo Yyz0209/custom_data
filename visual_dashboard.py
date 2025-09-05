@@ -1277,31 +1277,7 @@ with st.sidebar:
                         env = os.environ.copy()
                         if proxy:
                             env["PLAYWRIGHT_PROXY"] = proxy
-                        # 先尝试安装浏览器（按照用户提供的方法）
-                        import os as _os
-                        env["PLAYWRIGHT_BROWSERS_PATH"] = "0"
-                        st.write("正在安装 Playwright…")
-                        rc1 = _os.system("playwright install")
-                        st.write(f"playwright install 返回码: {rc1}")
-                        st.write("正在安装 Playwright 依赖…")
-                        rc2 = _os.system("playwright install-deps")
-                        st.write(f"playwright install-deps 返回码: {rc2}")
-                        if rc1 == 0:
-                            st.success("Playwright installed.")
-                        # 诊断 playwright 版本
-                        diag = _sp.run(
-                            [sys.executable, "-m", "playwright", "--version"],
-                            capture_output=True, text=True, encoding="utf-8", errors="ignore", env=env
-                        )
-                        if diag.stdout:
-                            st.caption(f"Playwright 版本: {diag.stdout.strip()}")
-                        ls = _sp.run(
-                            [sys.executable, "-c", "import os,glob; p=os.path.expanduser('~/.cache/ms-playwright'); print('BROWSERS:', os.listdir(p) if os.path.isdir(p) else 'missing')"],
-                            capture_output=True, text=True, encoding="utf-8", errors="ignore", env=env
-                        )
-                        if ls.stdout:
-                            st.caption(ls.stdout.strip())
-                        # 正式抓取
+                        # 直接抓取（Cloud 安装逻辑已移除，部署到 Cloud Run）
                         result = _sp.run(
                             [sys.executable, os.path.join("scripts", "cme_fedwatch_scrape.py")],
                             capture_output=True,
@@ -1894,5 +1870,3 @@ elif page == "CME FEDWATCH":
                 st.dataframe(df, width='stretch', hide_index=True)
             else:
                 st.info("点阵表格暂无可展示数据。")
-
-
