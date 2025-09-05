@@ -50,13 +50,7 @@ def _get_proxy_from_env():
     return None
 
 
-# Ensure Chromium browser is available (Streamlit Cloud etc.)
-# This downloads the browser binaries if missing; harmless if already installed.
-try:
-    import subprocess as _sp
-    _sp.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False, capture_output=True)
-except Exception:
-    pass
+
 
 EVAL_PARSE_TABLE = """
 (el) => {
