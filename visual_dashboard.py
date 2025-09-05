@@ -1281,12 +1281,12 @@ with st.sidebar:
                         # 确保浏览器装到本地缓存（Cloud 允许该路径写入）
                         env["PLAYWRIGHT_BROWSERS_PATH"] = "0"
                         inst = _sp.run(
-                            [sys.executable, "-m", "playwright", "install", "chromium"],
+                            [sys.executable, "-m", "playwright", "install", "chromium", "chromium-headless-shell"],
                             capture_output=True,
                             text=True,
                             encoding="utf-8",
                             errors="ignore",
-                            timeout=600,
+                            timeout=900,
                             env=env,
                         )
                         if inst.returncode != 0:
@@ -1295,13 +1295,19 @@ with st.sidebar:
                                 st.text_area("安装输出(错误)", inst.stderr, height=120)
                         elif inst.stdout:
                             st.text_area("安装输出", inst.stdout, height=120)
-                        # 诊断 playwright 版本
+                        # 诊断 playwright 版本 & 浏览器列表
                         diag = _sp.run(
                             [sys.executable, "-m", "playwright", "--version"],
                             capture_output=True, text=True, encoding="utf-8", errors="ignore", env=env
                         )
                         if diag.stdout:
                             st.caption(f"Playwright 版本: {diag.stdout.strip()}")
+                        ls = _sp.run(
+                            [sys.executable, "-c", "import os,glob; p=os.path.expanduser('~/.cache/ms-playwright'); print('BROWSERS:', os.listdir(p) if os.path.isdir(p) else 'missing')"],
+                            capture_output=True, text=True, encoding="utf-8", errors="ignore", env=env
+                        )
+                        if ls.stdout:
+                            st.caption(ls.stdout.strip())
                         # 正式抓取
                         result = _sp.run(
                             [sys.executable, os.path.join("scripts", "cme_fedwatch_scrape.py")],
