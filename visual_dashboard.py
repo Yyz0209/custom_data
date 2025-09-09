@@ -322,7 +322,7 @@ def build_fedwatch_heatmap(prob_data, title=""):
     hm.set_global_opts(
         title_opts=opts.TitleOpts(title=""),
         tooltip_opts=opts.TooltipOpts(is_show=True, formatter=JsCode("function(p){return p.name + '<br/>概率: ' + (p.value[2]).toFixed(1) + '%';}")),
-        xaxis_opts=opts.AxisOpts(axislabel_opts=opts.LabelOpts(rotate=30)),
+        xaxis_opts=opts.AxisOpts(position="top", axislabel_opts=opts.LabelOpts(rotate=0)),
         yaxis_opts=opts.AxisOpts(axislabel_opts=opts.LabelOpts(rotate=0)),
         visualmap_opts=opts.VisualMapOpts(
             max_=100,
@@ -633,11 +633,9 @@ def create_horizontal_percentage_chart(data, title, regions, categories):
 @st.cache_data
 def load_fx_deposit_loan():
     """
-    从多个 Excel 文件（如 2023/2024/2025金融机构外币存贷款.xlsx）汇总月度数据，
-    仅按“住户 + 非金融企业”构成境内口径；境外单独提取；
-    输出合计与12期同比。
-
-    返回 DataFrame 列：
+    从 pbc_fx_credit_all.csv 读取“金融机构外汇信贷收支表”，
+    提取：外币存款_境内/境外、外币贷款_境内/境外 的月度序列；
+    计算合计与12期同比（%），返回列：
         日期, 外币存款_境内, 外币存款_境外, 外币存款_合计, 存款同比,
             外币贷款_境内, 外币贷款_境外, 外币贷款_合计, 贷款同比
     """
@@ -645,251 +643,91 @@ def load_fx_deposit_loan():
     import re
     import pandas as pd
 
-    def _find_files():
-        files = []
-        try:
-            base_dirs = [
-                os.getcwd(),
-                os.path.dirname(os.path.abspath(__file__)),
-                os.path.join(os.getcwd(), '数据'),
-                os.path.join(os.getcwd(), 'data'),
-            ]
-            patterns = [
-                '*金融机构*外币*存贷款*.xlsx',
-                '*外币*存贷款*.xlsx',
-                '2023*外币*存贷款*.xlsx',
-                '2024*外币*存贷款*.xlsx',
-                '2025*外币*存贷款*.xlsx',
-            ]
-            import glob
-            for d in base_dirs:
-                if not os.path.isdir(d):
-                    continue
-                for p in patterns:
-                    files.extend(glob.glob(os.path.join(d, p)))
-        except Exception:
-            pass
-        # 去重为文件名（同名以最早年份排序）
-        files = list(dict.fromkeys(files))
-        def _key(x):
-            m = re.search(r'(20\d{2})', x)
-            return int(m.group(1)) if m else 0
-        return sorted(files, key=_key)
-
-    def _clean_text(s):
-        t = str(s)
-        t = t.replace('\u3000',' ').replace('\xa0',' ').strip()
-        t = t.replace('（','(').replace('）',')')
-        return t
-
-    def _to_month(col):
-        # 匹配 yyyy-mm（首部匹配即可），并兼容：
-        # - 全/长横线（统一为 -）
-        # - pandas 读成 Timestamp/datetime/date（取其 year、month）
-        import datetime as _dt
-        if isinstance(col, (pd.Timestamp, _dt.datetime, _dt.date)):
-            return pd.Timestamp(getattr(col, 'year'), getattr(col, 'month'), 1)
-        s = _clean_text(col)
-        s = s.replace('－', '-').replace('–', '-').replace('—', '-')
-        # 允许后面跟 -dd 或时间串，只要前缀是 yyyy-mm 即可
-        m = re.findall(r'^(20\d{2})\-(0[1-9]|1[0-2])', s)
-        if m:
-            y, mm = m[0]
-            return pd.Timestamp(int(y), int(mm), 1)
-        # 兜底：尝试 to_datetime 再取 year/month
-        try:
-            dt = pd.to_datetime(s, errors='coerce')
-            if pd.notna(dt):
-                return pd.Timestamp(dt.year, dt.month, 1)
-        except Exception:
-            pass
+    csv_path = os.path.join(os.getcwd(), 'pbc_fx_credit_all.csv')
+    if not os.path.exists(csv_path):
         return None
 
-    # 目标行关键字（中文/英文），避免抓到“短期/中长期/子项”
-    KW = {
-        'dep_hh': [r'住户存款', r'Deposits\s*of\s*Households'],
-        'dep_nfe': [r'非金融企业存款', r'Deposits\s*of\s*Non\-?financial\s*Enterprises'],
-        'dep_over': [r'境外存款', r'Overseas\s*Deposits'],
-        # 贷款：按你的要求，境内贷款直接匹配“境内贷款/Domestic Loans”，不再用住户+非金求和
-        'loan_dom': [r'境内贷款', r'国内贷款', r'本外币贷款', r'Domestic\s*Loans?'],
-        'loan_over': [r'境外贷款', r'Overseas\s*Loans'],
-        # 下面两个只保留以备后续需要（当前不用于境内口径计算）
-        'loan_hh': [r'住户贷款', r'Loans\s*to\s*Households'],
-        'loan_nfe': [r'非金融企业.*贷款', r'Loans\s*to\s*Non\-?financial\s*Enterprises', r'Non\-financial\s*Enterprises.*Organizations'],
-    }
-    SUBITEM_EXCLUDE = r'短期|中长期|消费|经营|按揭|购车|短\s*期|中\s*长\s*期'
+    try:
+        raw = pd.read_csv(csv_path, encoding='utf-8-sig')
+    except Exception:
+        # 尝试无 BOM
+        raw = pd.read_csv(csv_path, encoding='utf-8', errors='ignore')
 
-    def _match_label(s, patterns):
-        s = _clean_text(s)
-        if re.search(SUBITEM_EXCLUDE, s):
-            return False
-        for p in patterns:
-            if re.search(p, s, flags=re.IGNORECASE):
-                return True
-        return False
+    # 识别月份列（yyyy-mm）
+    month_cols = [c for c in raw.columns if re.fullmatch(r'20\d{2}-\d{2}', str(c).strip())]
+    if not month_cols:
+        return None
+    month_cols = sorted(month_cols)
 
-    def _extract_from_sheet(df):
-        # 方案A：按列名识别月份（适用于标准表头）
-        df = df.copy()
-        # 注意：不要修改 df.columns 的原始类型，避免 2023.10 被转成 '2023.1' 导致 10 月丢失
-        label_col = None
-        if len(df.columns) == 0:
-            return {}
-        for c in df.columns[:3]:  # 前3列里找文字列
-            try:
-                series = df[c].astype(str)
-            except Exception:
-                continue
-            if series.str.contains('存款|贷款|Item|项目|Loans|Deposits', regex=True, na=False).any():
-                label_col = c
-                break
-        if label_col is None:
-            label_col = df.columns[0]
-        # 识别月份列
-        month_cols = []
-        for c in df.columns:
-            ts = _to_month(c)
-            if ts is not None:
-                month_cols.append((c, ts))
-        # 去重并按月份排序（防止 2023.10 被等价成 2023.1 导致顺序错误）
-        seen = set()
-        uniq = []
-        for c, ts in month_cols:
-            if ts not in seen:
-                uniq.append((c, ts))
-                seen.add(ts)
-        month_cols = sorted(uniq, key=lambda x: x[1])
-        if not month_cols:
-            return {}
-        # 生成一个 label -> Series(ts->value)
-        out = {}
-        for _, row in df.iterrows():
-            label = _clean_text(row.get(label_col, ''))
-            if not label:
-                continue
-            for key, pats in KW.items():
-                if _match_label(label, pats):
-                    vals = {}
-                    for c, ts in month_cols:
-                        v = pd.to_numeric(row.get(c), errors='coerce')
-                        if pd.notna(v):
-                            vals[ts] = float(v)
-                    s = pd.Series(vals).sort_index()
-                    out[key] = out.get(key, pd.Series(dtype=float)).combine_first(s)
-        return out
+    def _norm_label(s: str) -> str:
+        s = str(s or '')
+        s = s.replace('\u3000',' ').replace('\xa0',' ').strip()
+        s = s.replace('（','(').replace('）',')')
+        return s
 
-    def _extract_from_sheet_fuzzy(df):
-        """
-        模糊解析：
-        - 在前几列/行中定位“标签列”（含 Loans/Deposits/存款/贷款）；
-        - 月份列仅识别 yyyy-mm（兼容全角/长横线，会统一为-）；
-        - 如果列名无法识别，则在前若干行单元格里寻找 yyyy-mm 作为该列月份。
-        """
-        df = df.copy()
-        # 文本视图用于关键字/月份识别，但保留原 df 取数
-        text = df.astype(str).map(_clean_text)
+    raw['项目'] = raw.get('项目', '').map(_norm_label)
+    raw['Item'] = raw.get('Item', '').map(_norm_label)
 
-        # 1) 标签列：前3-4列中找关键字
-        label_col_idx = None
-        max_scan_rows = min(30, len(text))
-        scan_cols = min(4, text.shape[1])
-        for j in range(scan_cols):
-            col_vals = text.iloc[:max_scan_rows, j]
-            if col_vals.str.contains('存款|贷款|Loans|Deposits|Item|项目', regex=True, na=False).any():
-                label_col_idx = j
-                break
-        if label_col_idx is None:
-            return {}
-
-        # 2) 月份列：优先列名；否则在前10行里找 yyyy-mm
-        month_cols = []  # (col_index, ts)
-        for j in range(text.shape[1]):
-            ts_found = None
-            # 列名本身
-            ts = _to_month(df.columns[j])
-            if ts is not None:
-                ts_found = ts
-            else:
-                # 前10行单元格
-                for i in range(min(10, len(text))):
-                    ts = _to_month(text.iat[i, j])
-                    if ts is not None:
-                        ts_found = ts
-                        break
-            if ts_found is not None:
-                month_cols.append((j, ts_found))
-        if not month_cols:
-            return {}
-        # 去重并按时间排序
-        uniq = {}
-        for j, ts in month_cols:
-            uniq[ts] = j
-        month_cols = sorted([(c, ts) for ts, c in uniq.items()], key=lambda x: x[1])
-
-        # 3) 逐行提取
-        out = {}
-        for i in range(len(text)):
-            label = text.iat[i, label_col_idx]
-            if not label:
-                continue
-            for key, pats in KW.items():
-                if _match_label(label, pats):
-                    vals = {}
-                    for c, ts in month_cols:
-                        v = pd.to_numeric(df.iat[i, c], errors='coerce')
-                        if pd.notna(v):
-                            vals[ts] = float(v)
-                    s = pd.Series(vals).sort_index()
-                    out[key] = out.get(key, pd.Series(dtype=float)).combine_first(s)
-        return out
-
-
-
-    # 汇总所有文件/工作表
-    ser_map = {}
-    for path in _find_files():
-        try:
-            xls = pd.ExcelFile(path)
-        except Exception:
-            continue
-        for sh in xls.sheet_names:
-            try:
-                raw = xls.parse(sh, header=0)
-            except Exception:
-                continue
-            part_a = _extract_from_sheet(raw)
-            # 同时跑一遍模糊解析，用于兼容表头复杂的工作表；二者结果做并集
-            try:
-                part_b = _extract_from_sheet_fuzzy(raw)
-            except Exception:
-                part_b = {}
-            keys = set(part_a.keys()) | set(part_b.keys())
-            for k in keys:
-                s_a = part_a.get(k, pd.Series(dtype=float))
-                s_b = part_b.get(k, pd.Series(dtype=float))
-                merged = s_a.combine_first(s_b)
-                if not merged.empty:
-                    ser_map[k] = ser_map.get(k, pd.Series(dtype=float)).combine_first(merged)
-
-    if not ser_map:
+    def _find_row(keyword_pairs):
+        """keyword_pairs: list of (zh_kw_regex, en_kw_regex)"""
+        for _, r in raw.iterrows():
+            zh = _norm_label(r.get('项目', ''))
+            en = _norm_label(r.get('Item', ''))
+            for zke, eke in keyword_pairs:
+                z_ok = bool(re.search(zke, zh)) if zke else False
+                e_ok = bool(re.search(eke, en, flags=re.IGNORECASE)) if eke else False
+                if z_ok or e_ok:
+                    return r
         return None
 
-    # 构造 DataFrame
-    idx = None
-    for s in ser_map.values():
-        if idx is None:
-            idx = s.index
-        else:
-            idx = idx.union(s.index)
+    # 关键行匹配（尽量用中文，英文兜底）
+    # 存款：按要求，境内=住户存款 + 非金融企业存款；境外=表内“境外.*存款”
+    row_dep_hh = _find_row([
+        (r'住户.*存款', r'Household.*Deposits'),
+    ])
+    row_dep_nfe = _find_row([
+        (r'非金融.*企业.*存款|非金融企业.*存款', r'Non.?financial.*Enterprises?.*Deposits'),
+    ])
+    row_dep_dom_legacy = _find_row([
+        (r'境内.*存款', r'Domestic.*Deposits'),
+        (r'国内.*存款', r''),
+    ])
+    row_dep_for = _find_row([
+        (r'境外.*存款', r'Overseas.*Deposits'),
+    ])
+    row_loan_dom = _find_row([
+        (r'境内.*贷款', r'Domestic.*Loans?'),
+        (r'国内.*贷款', r''),
+    ])
+    row_loan_for = _find_row([
+        (r'境外.*贷款', r'Overseas.*Loans?'),
+    ])
+
+    # 构造时间序列
+    def _series_from_row(row):
+        if row is None:
+            return pd.Series(dtype=float)
+        s = pd.to_numeric([row.get(c) for c in month_cols], errors='coerce')
+        ts = pd.Series(s, index=pd.to_datetime(month_cols, format='%Y-%m'))
+        return ts
+
+    # 计算境内=住户 + 非金融企业；若二者缺失则退回到“境内存款”行
+    s_hh = _series_from_row(row_dep_hh)
+    s_nfe = _series_from_row(row_dep_nfe)
+    dep_dom_candidate = s_hh.add(s_nfe, fill_value=0)
+    dep_dom_legacy = _series_from_row(row_dep_dom_legacy)
+    dep_dom = dep_dom_candidate if not dep_dom_candidate.empty else dep_dom_legacy
+    dep_for = _series_from_row(row_dep_for)
+    loan_dom = _series_from_row(row_loan_dom)
+    loan_for = _series_from_row(row_loan_for)
+
+    # 对齐索引
+    idx = dep_dom.index.union(dep_for.index).union(loan_dom.index).union(loan_for.index)
     idx = idx.sort_values()
-
-    def get_series(name):
-        return ser_map.get(name, pd.Series(index=idx, dtype=float)).reindex(idx)
-
-    dep_dom = get_series('dep_hh').fillna(0) + get_series('dep_nfe').fillna(0)
-    dep_for = get_series('dep_over').fillna(pd.NA)
-    loan_dom = get_series('loan_dom').fillna(pd.NA)  # 直接匹配“境内贷款”
-    loan_for = get_series('loan_over').fillna(pd.NA)
+    dep_dom = dep_dom.reindex(idx)
+    dep_for = dep_for.reindex(idx)
+    loan_dom = loan_dom.reindex(idx)
+    loan_for = loan_for.reindex(idx)
 
     df = pd.DataFrame({
         '日期': idx,
@@ -898,22 +736,20 @@ def load_fx_deposit_loan():
         '外币贷款_境内': loan_dom.values,
         '外币贷款_境外': loan_for.values,
     })
-    # 合计与同比（合计）
+
+    # 合计与同比（合计的12个月同比，单位为百分比）
     df['外币存款_合计'] = pd.to_numeric(df['外币存款_境内'], errors='coerce').fillna(0) + pd.to_numeric(df['外币存款_境外'], errors='coerce').fillna(0)
     df['外币贷款_合计'] = pd.to_numeric(df['外币贷款_境内'], errors='coerce').fillna(0) + pd.to_numeric(df['外币贷款_境外'], errors='coerce').fillna(0)
-    # 同比：保留两位小数的百分比，最早从 2024-01 开始（即有足够12个月基数时）
-    df['存款同比'] = (df['外币存款_合计'].replace(0, pd.NA).pct_change(12) * 100).round(2)
-    df['贷款同比'] = (df['外币贷款_合计'].replace(0, pd.NA).pct_change(12) * 100).round(2)
-    # 清除 2024年1月之前的同比（不足12个月）
-    first_yoy_date = None
-    if len(df) and pd.notna(df.iloc[0]['日期']):
-        # 以时间索引为准，定位起始可同比的索引位置
-        try:
-            first_yoy_date = pd.to_datetime(df['日期']).min() + pd.DateOffset(months=12)
-        except Exception:
-            first_yoy_date = None
-    if first_yoy_date is not None:
+
+    # 可选：计算同比，但在图表中不直接显示折线
+    try:
+        df['存款同比'] = (df['外币存款_合计'].replace(0, pd.NA).pct_change(12) * 100).round(2)
+        df['贷款同比'] = (df['外币贷款_合计'].replace(0, pd.NA).pct_change(12) * 100).round(2)
+        first_yoy_date = pd.to_datetime(df['日期']).min() + pd.DateOffset(months=12)
         df.loc[pd.to_datetime(df['日期']) < first_yoy_date, ['存款同比','贷款同比']] = pd.NA
+    except Exception:
+        df['存款同比'] = pd.NA
+        df['贷款同比'] = pd.NA
 
     return df
 
@@ -989,10 +825,19 @@ def build_stack_bar_two_series_with_yoy(x, s1, s2, yoy_pct, title, name1="境内
     )
     line = Line()
     line.add_xaxis(x)
-    line.add_yaxis("同比", [None if pd.isna(v) else v for v in yoy_pct], yaxis_index=1,
-                   is_smooth=False, is_symbol_show=True, symbol="circle", symbol_size=7,
-                   linestyle_opts=opts.LineStyleOpts(width=2.2, color=line_color),
-                   itemstyle_opts=opts.ItemStyleOpts(color=line_color), z=100)
+    line.add_yaxis(
+        "同比",
+        [None if pd.isna(v) else v for v in yoy_pct],
+        yaxis_index=1,
+        is_smooth=False,
+        is_symbol_show=True,
+        symbol="circle",
+        symbol_size=7,
+        label_opts=opts.LabelOpts(is_show=False),  # 隐藏数据标签，仅显示折线与节点
+        linestyle_opts=opts.LineStyleOpts(width=2.2, color=line_color),
+        itemstyle_opts=opts.ItemStyleOpts(color=line_color),
+        z=100,
+    )
     return bar.overlap(line)
 def build_bar_line_dual_axis(x_list, amt_list, yoy_pct_list, amt_name, title, bar_color=None, line_color=None):
     """
@@ -1130,7 +975,7 @@ with st.sidebar:
     _group_pages = {
         "海关数据": ["海关综合看板", "海关产品类别看板"],
         "银行数据": ["机构外币存贷款看板", "银行结售汇"],
-        "宏观数据": ["汇率数据", "CME FEDWATCH"],
+        "宏观数据": ["汇率数据", "利率数据", "CME FEDWATCH"],
     }
     _page_options = _group_pages.get(category, [])
     _page_labels = {
@@ -1139,6 +984,7 @@ with st.sidebar:
         "机构外币存贷款看板": "💱 机构外币存贷款看板",
         "银行结售汇": "🏦 银行结售汇",
         "汇率数据": "💹 汇率数据",
+        "利率数据": "📉 利率数据",
         "CME FEDWATCH": "📈 CME FedWatch",
     }
     page = st.radio(
@@ -1170,7 +1016,7 @@ with st.sidebar:
 
         st.markdown("---")
         st.subheader("数据更新")
-        if st.button("更新海关统计数据", type="primary", width='stretch', key="btn_update_customs"):
+        if st.button("更新海关统计数据", type="primary", use_container_width=True, key="btn_update_customs"):
             with st.spinner("正在更新海关统计数据，请稍候..."):
                 res = run_data_updater()
             if res.get("success"):
@@ -1241,7 +1087,7 @@ with st.sidebar:
             )
 
             st.markdown("---")
-            st.button("应用并隐藏筛选", type="primary", width='stretch', on_click=hide_cat_filters)
+            st.button("应用并隐藏筛选", type="primary", use_container_width=True, on_click=hide_cat_filters)
         else:
 
             cur = st.session_state.get("cat_currency", "美元")
@@ -1258,7 +1104,7 @@ with st.sidebar:
             st.caption(f"币种：{cur}")
             st.caption(f"地区：{len(regs)} 项（{summarize(regs)}）")
             st.caption(f"产品类别：{len(cats)} 项（{summarize(cats)}）")
-            st.button("编辑筛选", width='stretch', on_click=show_cat_filters)
+            st.button("编辑筛选", use_container_width=True, on_click=show_cat_filters)
 
         st.caption("数据来源：海关总署")
 
@@ -1270,7 +1116,7 @@ with st.sidebar:
             st.subheader("FedWatch 数据更新")
             st.caption("一键从 CME FedWatch 抓取并更新数据（需联网，可能需要代理）")
             proxy = st.text_input("代理（可选）", value=os.environ.get("PLAYWRIGHT_PROXY", ""), key="fedwatch_proxy")
-            if st.button("更新 FedWatch 数据", type="primary", width='stretch', key="btn_update_fedwatch"):
+            if st.button("更新 FedWatch 数据", type="primary", use_container_width=True, key="btn_update_fedwatch"):
                 with st.spinner("正在抓取并更新 FedWatch 数据，请稍候..."):
                     import subprocess as _sp
                     try:
@@ -1347,12 +1193,23 @@ if page == "海关综合看板":
 
             if loc == "浙江省":
                 ZHEJIANG_CITIES = ["杭州市", "宁波市", "温州市", "湖州市", "金华市", "台州市", "嘉兴市", "丽水市", "衢州市", "绍兴市", "舟山市"]
-                with st.expander("展开/收起 浙江省地市数据概览"):
+                with st.expander("展开/收起 浙江省地市数据概览", expanded=False):
+                    shown_any = False
                     for city in ZHEJIANG_CITIES:
                         city_df = data.get(city)
                         if city_df is None or city_df.empty:
                             continue
                         latest_city = city_df.iloc[city_df["时间"].map(pd.to_datetime).idxmax()]
+                        month_str = pd.to_datetime(latest_city.get("时间")).strftime("%Y-%m") if pd.notna(latest_city.get("时间")) else ""
+                        st.markdown(f"**{city}（{month_str}）**")
+                        cc1, cc2, cc3 = st.columns(3)
+                        cc1.markdown(render_card("进出口(年初至今)", latest_city.get("进出口_年初至今"), latest_city.get("进出口_年初至今同比")), unsafe_allow_html=True)
+                        cc2.markdown(render_card("进口(年初至今)", latest_city.get("进口_年初至今"), latest_city.get("进口_年初至今同比")), unsafe_allow_html=True)
+                        cc3.markdown(render_card("出口(年初至今)", latest_city.get("出口_年初至今"), latest_city.get("出口_年初至今同比")), unsafe_allow_html=True)
+                        st.markdown("")
+                        shown_any = True
+                    if not shown_any:
+                        st.info("未找到可展示的浙江省地市数据")
 
 
     st.markdown("<hr/>", unsafe_allow_html=True)
@@ -1382,13 +1239,15 @@ if page == "海关综合看板":
 
         with tab2:
             disp = loc_df_sorted.copy()
-            for col in disp.columns:
+            # 百分比列格式化显示
+            for col in list(disp.columns):
                 if "同比" in col:
-                    disp[col] = disp[col].apply(lambda v: f"{v:.2%}" if pd.notna(v) else "—")
+                    try:
+                        disp[col] = disp[col].apply(lambda v: f"{float(v):.2%}" if pd.notna(v) else "—")
+                    except Exception:
+                        pass
             disp["时间"] = disp["时间"].dt.strftime("%Y-%m")
-
-
-
+            st.dataframe(disp, use_container_width=True)
 
 elif page == "海关产品类别看板":
     category_data = load_category_data2()
@@ -1446,7 +1305,7 @@ elif page == "海关产品类别看板":
                         display_data[col] = display_data[col].apply(lambda x: f"{x:,.0f}" if pd.notna(x) and x != 0 else "—")
                     st.dataframe(
                         display_data,
-                        width='stretch',
+                        use_container_width=True,
                         height=min(len(available_regions) * 35 + 50, 300),
                     )
                 with col2:
@@ -1457,7 +1316,7 @@ elif page == "海关产品类别看板":
                         percentage_data[col] = percentage_data[col].apply(lambda x: f"{x:.1f}%" if pd.notna(x) and x != 0 else "—")
                     st.dataframe(
                         percentage_data,
-                        width='stretch',
+                        use_container_width=True,
                         height=min(len(available_regions) * 35 + 50, 300),
                     )
 
@@ -1518,19 +1377,21 @@ elif page == "机构外币存贷款看板":
         c1.markdown(render_card("外币存款（年初至今）", ytd_dep, ytd_dep_yoy), unsafe_allow_html=True)
         c2.markdown(render_card("外币贷款（年初至今）", ytd_loan, ytd_loan_yoy), unsafe_allow_html=True)
 
-        # 外币存款：境内/境外 堆叠 + 合计同比折线
+        # 外币存款：境内/境外 堆叠 + 合计同比折线（隐藏数据标签）
         dep_dom = df.get("外币存款_境内", pd.Series([0]*len(df))).round(2).tolist()
         dep_for = df.get("外币存款_境外", pd.Series([0]*len(df))).round(2).tolist()
-        dep_yoy = df.get("存款同比", pd.Series([None]*len(df))).where(df.get("存款同比").notna(), None).tolist()
+        dep_yoy = df.get("存款同比", pd.Series([None]*len(df)))
+        dep_yoy = dep_yoy.where(dep_yoy.notna(), None).tolist()
         dep_chart = build_stack_bar_two_series_with_yoy(
             x_axis, dep_dom, dep_for, dep_yoy, "外币存款（境内/境外）"
         )
         show_chart(dep_chart, height="520px")
 
-        # 外币贷款：境内/境外 堆叠 + 合计同比折线
+        # 外币贷款：境内/境外 堆叠 + 合计同比折线（隐藏数据标签）
         loan_dom = df.get("外币贷款_境内", pd.Series([0]*len(df))).round(2).tolist()
         loan_for = df.get("外币贷款_境外", pd.Series([0]*len(df))).round(2).tolist()
-        loan_yoy = df.get("贷款同比", pd.Series([None]*len(df))).where(df.get("贷款同比").notna(), None).tolist()
+        loan_yoy = df.get("贷款同比", pd.Series([None]*len(df)))
+        loan_yoy = loan_yoy.where(loan_yoy.notna(), None).tolist()
         loan_chart = build_stack_bar_two_series_with_yoy(
             x_axis, loan_dom, loan_for, loan_yoy, "外币贷款（境内/境外）"
         )
@@ -1540,14 +1401,11 @@ elif page == "机构外币存贷款看板":
         st.subheader("明细数据")
         cols = [
             "月份",
-            "外币存款_境内","外币存款_境外","外币存款_合计","存款同比",
-            "外币贷款_境内","外币贷款_境外","外币贷款_合计","贷款同比",
+            "外币存款_境内","外币存款_境外","外币存款_合计",
+            "外币贷款_境内","外币贷款_境外","外币贷款_合计",
         ]
         table = df[cols].copy()
-        # 同比改为保留两位小数的实数（不再显示百分号）；卡片显示仍用百分比
-        table["存款同比"] = table["存款同比"].apply(lambda x: round(float(x), 2) if pd.notna(x) else None)
-        table["贷款同比"] = table["贷款同比"].apply(lambda x: round(float(x), 2) if pd.notna(x) else None)
-        st.dataframe(table.sort_values("月份", ascending=False), width='stretch', hide_index=True)
+        st.dataframe(table.sort_values("月份", ascending=False), use_container_width=True, hide_index=True)
 
 elif page == "银行结售汇":
     # 顶部标题与月份窗口（全宽，无额外阴影样式）
@@ -1833,9 +1691,111 @@ elif page == "银行结售汇":
     table.index = table.index.strftime("%Y-%m")
     st.dataframe(
         table[["结汇", "售汇", "差额", "结汇同比", "售汇同比", "差额同比"]].sort_index(ascending=False),
-        width='stretch',
+        use_container_width=True,
         hide_index=False,
     )
+
+elif page == "利率数据":
+    st.subheader("利率数据")
+    st.caption("数据来源：FRED")
+
+    @st.cache_data
+    def _load_fred_rate_csv(path: str):
+        import pandas as _pd
+        try:
+            df = _pd.read_csv(path, na_values=['.'])
+        except Exception:
+            return None
+        if df is None or df.empty:
+            return None
+        cols = list(df.columns)
+        date_col = 'DATE' if 'DATE' in cols else ('observation_date' if 'observation_date' in cols else None)
+        if not date_col:
+            return None
+        val_cols = [c for c in cols if c != date_col]
+        if not val_cols:
+            return None
+        val_col = val_cols[0]
+        df = df[[date_col, val_col]].rename(columns={date_col: 'DATE', val_col: 'value'})
+        df['DATE'] = _pd.to_datetime(df['DATE'], errors='coerce')
+        df['value'] = _pd.to_numeric(df['value'], errors='coerce')
+        df = df.dropna(subset=['DATE']).sort_values('DATE')
+        df = df[df['DATE'] >= _pd.Timestamp('2020-01-01')]
+        return df
+
+    def _build_rate_line(x_list, y_list, title):
+        chart = Line(init_opts=opts.InitOpts(bg_color="#FFFFFF", width="100%"))
+        chart.add_xaxis(xaxis_data=x_list)
+        chart.set_colors(PALETTE)
+        chart.add_yaxis(
+            series_name=title,
+            y_axis=y_list,
+            label_opts=opts.LabelOpts(is_show=False),
+            is_smooth=False,
+        )
+        chart.set_global_opts(
+            title_opts=opts.TitleOpts(title=title, pos_left="center", title_textstyle_opts=opts.TextStyleOpts(color="#111827")),
+            tooltip_opts=opts.TooltipOpts(trigger="axis"),
+            toolbox_opts=opts.ToolboxOpts(
+                is_show=True,
+                feature=opts.ToolBoxFeatureOpts(
+                    save_as_image=opts.ToolBoxFeatureSaveAsImageOpts(),
+                    data_view=opts.ToolBoxFeatureDataViewOpts(is_show=True, is_read_only=False),
+                    data_zoom=opts.ToolBoxFeatureDataZoomOpts(),
+                    magic_type=opts.ToolBoxFeatureMagicTypeOpts(type_=["line", "bar"]),
+                    restore=opts.ToolBoxFeatureRestoreOpts(),
+                ),
+            ),
+            xaxis_opts=opts.AxisOpts(type_="category", boundary_gap=False),
+            yaxis_opts=opts.AxisOpts(name="利率(%)", min_="dataMin", max_="dataMax", is_scale=True),
+            legend_opts=opts.LegendOpts(orient="horizontal", pos_top="40"),
+            datazoom_opts=[
+                opts.DataZoomOpts(type_="inside", filter_mode="filter"),
+                opts.DataZoomOpts(type_="slider", pos_bottom="8", range_start=0, range_end=100, filter_mode="filter"),
+            ],
+        )
+        return chart
+
+    sof = _load_fred_rate_csv("SOFR.csv")
+    son = _load_fred_rate_csv("IUDSOIA.csv")
+    estr = _load_fred_rate_csv("ECBESTRVOLWGTTRMDMNRT.csv")
+
+    if sof is not None and not sof.empty:
+        st.subheader("SOFR")
+        x = sof['DATE'].dt.strftime('%Y-%m-%d').tolist()
+        y = sof['value'].round(4).tolist()
+        show_chart(_build_rate_line(x, y, "SOFR"), height="420px")
+
+    if son is not None and not son.empty:
+        st.subheader("SONIA (IUDSOIA)")
+        x = son['DATE'].dt.strftime('%Y-%m-%d').tolist()
+        y = son['value'].round(4).tolist()
+        show_chart(_build_rate_line(x, y, "SONIA"), height="420px")
+
+    if estr is not None and not estr.empty:
+        st.subheader("ESTR (ECBESTRVOLWGTTRMDMNRT)")
+        x = estr['DATE'].dt.strftime('%Y-%m-%d').tolist()
+        y = estr['value'].round(4).tolist()
+        show_chart(_build_rate_line(x, y, "ESTR"), height="420px")
+
+    st.markdown("<hr/>", unsafe_allow_html=True)
+    st.subheader("明细数据")
+    _tables = []
+    if sof is not None and not sof.empty:
+        _tables.append(sof.assign(Series='SOFR'))
+    if son is not None and not son.empty:
+        _tables.append(son.assign(Series='SONIA'))
+    if estr is not None and not estr.empty:
+        _tables.append(estr.assign(Series='ESTR'))
+    if _tables:
+        detail = pd.concat(_tables, ignore_index=True)
+        detail.sort_values(['Series','DATE'], inplace=True)
+        disp = detail.copy()
+        disp['DATE'] = pd.to_datetime(disp['DATE']).dt.strftime('%Y-%m-%d')
+        st.dataframe(disp[['Series','DATE','value']], use_container_width=True, hide_index=True)
+    else:
+        st.info("暂无可显示的明细数据")
+
 
 elif page == "汇率数据":
     st.subheader("汇率数据")
@@ -1867,6 +1827,6 @@ elif page == "CME FEDWATCH":
         else:
             df = build_fedwatch_dot_table(dp)
             if df is not None:
-                st.dataframe(df, width='stretch', hide_index=True)
+                st.dataframe(df, use_container_width=True, hide_index=True)
             else:
                 st.info("点阵表格暂无可展示数据。")
